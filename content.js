@@ -1,4 +1,29 @@
-console.log('[LeadPilot] Content Script v2.1 — Fixed');
+console.log('[LeadPilot] Content Script v3.0 — Review Modal');
+
+// =============================================
+// CONSTANTS
+// =============================================
+const INDUSTRY_OPTIONS = [
+    'Technology', 'Finance & Banking', 'Healthcare', 'Manufacturing',
+    'Retail & E-Commerce', 'Education', 'Real Estate', 'Consulting',
+    'Marketing & Advertising', 'Media & Entertainment', 'Telecommunications',
+    'Transportation & Logistics', 'Energy & Utilities', 'Legal Services',
+    'Hospitality & Tourism', 'Agriculture', 'Construction', 'Pharmaceutical',
+    'Automotive', 'Non-Profit', 'Government', 'Other'
+];
+
+const STATUS_OPTIONS = [
+    'Pending', 'Requested', 'Connected', 'First Message Done', 'Replied', 'In Conversation'
+];
+
+const STATUS_COLORS = {
+    'Pending': '#94a3b8',
+    'Requested': '#f59e0b',
+    'Connected': '#22c55e',
+    'First Message Done': '#3b82f6',
+    'Replied': '#14b8a6',
+    'In Conversation': '#a855f7'
+};
 
 // =============================================
 // HELPERS
@@ -52,17 +77,39 @@ function getPageType() {
 // SELECTED LEADS QUEUE
 // =============================================
 let selectedLeads = [];
+let lastSavedLeads = null; // For undo functionality
+let undoTimeout = null;
 
 function addToQueue(data) {
     if (selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl)) return false;
     selectedLeads.push(data);
     renderPanel();
+    updateSelectAllState();
     return true;
 }
 
 function removeFromQueue(index) {
+    const removed = selectedLeads[index];
     selectedLeads.splice(index, 1);
+
+    // Deselect the corresponding checkbox on the page
+    if (removed && removed.linkedinUrl) {
+        document.querySelectorAll('.lp-row-checkbox').forEach(cb => {
+            const row = cb.closest('tr, li, div[data-view-name]');
+            if (!row) return;
+            const linkEl = row.querySelector('a[href*="/sales/lead/"], a[href*="/sales/people/"], .artdeco-entity-lockup__title a');
+            if (linkEl) {
+                const rowUrl = linkEl.href.split('?')[0];
+                if (rowUrl === removed.linkedinUrl) {
+                    cb.checked = false;
+                    row.classList.remove('lp-row-selected');
+                }
+            }
+        });
+    }
+
     renderPanel();
+    updateSelectAllState();
 }
 
 function clearQueue() {
@@ -70,6 +117,180 @@ function clearQueue() {
     document.querySelectorAll('.lp-row-checkbox:checked').forEach(cb => cb.checked = false);
     document.querySelectorAll('.lp-row-selected').forEach(el => el.classList.remove('lp-row-selected'));
     renderPanel();
+    updateSelectAllState();
+}
+
+// =============================================
+// SELECT ALL CHECKBOX
+// =============================================
+function injectSelectAll() {
+    try {
+        if (document.getElementById('lp-select-all-bar')) return;
+        const container = document.querySelector(
+            'div.search-results__result-list, ol.artdeco-list, table.artdeco-models-table, ' +
+            'div[data-view-name="lead-search-results"], div.lists-detail__table-body-container'
+        );
+        if (!container || !container.parentElement) return;
+
+        const bar = document.createElement('div');
+        bar.id = 'lp-select-all-bar';
+        bar.innerHTML = `
+            <label class="lp-select-all-label">
+                <input type="checkbox" id="lp-select-all-cb" class="lp-row-checkbox">
+                <span class="lp-checkmark"></span>
+                <span class="lp-select-all-text">Select All on Page</span>
+                <span id="lp-page-count" class="lp-page-count"></span>
+            </label>
+        `;
+        container.parentElement.insertBefore(bar, container);
+
+        document.getElementById('lp-select-all-cb').addEventListener('change', async (e) => {
+            const checked = e.target.checked;
+            const textEl = bar.querySelector('.lp-select-all-text');
+
+            if (checked) {
+                // Scroll through the page to force LinkedIn to render all lazy-loaded rows
+                textEl.textContent = 'Loading all leads...';
+                await scrollToLoadAllRows();
+                // Inject checkboxes on any new rows that appeared
+                injectListCheckboxes_noSelectAll();
+            }
+
+            // Now select/deselect all checkboxes
+            document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)').forEach(cb => {
+                if (cb.checked !== checked) {
+                    cb.checked = checked;
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+            textEl.textContent = 'Select All on Page';
+            updateSelectAllState();
+        });
+    } catch (err) {
+        console.warn('[LeadPilot] Select All injection skipped:', err.message);
+    }
+}
+
+// Scroll the results container to load all lazy rows
+function scrollToLoadAllRows() {
+    return new Promise((resolve) => {
+        // Find the scrollable container (LinkedIn uses different ones)
+        const scrollEl = document.querySelector(
+            '.search-results__result-list, .os-viewport, ' +
+            'div[class*="lead-list"] .os-viewport, main, ' +
+            '.artdeco-card .os-viewport'
+        ) || document.scrollingElement || document.documentElement;
+
+        let lastHeight = 0;
+        let sameCount = 0;
+        const maxScrolls = 20;
+        let scrollCount = 0;
+
+        const scrollStep = () => {
+            scrollEl.scrollTop = scrollEl.scrollHeight;
+            window.scrollTo(0, document.body.scrollHeight);
+            scrollCount++;
+
+            const currentHeight = scrollEl.scrollHeight + document.body.scrollHeight;
+            if (currentHeight === lastHeight) {
+                sameCount++;
+            } else {
+                sameCount = 0;
+            }
+            lastHeight = currentHeight;
+
+            // Stop if no new content loaded (2 consecutive same) or max scrolls
+            if (sameCount >= 2 || scrollCount >= maxScrolls) {
+                // Scroll back to top
+                scrollEl.scrollTop = 0;
+                window.scrollTo(0, 0);
+                setTimeout(resolve, 300);
+                return;
+            }
+            setTimeout(scrollStep, 400);
+        };
+        scrollStep();
+    });
+}
+
+// Inject checkboxes without re-calling injectSelectAll (avoids recursion)
+function injectListCheckboxes_noSelectAll() {
+    const rows = document.querySelectorAll(
+        'tr.artdeco-models-table-row, li.artdeco-list__item, ' +
+        'div[data-view-name="lead-lists-lead-detail-view"], ol.artdeco-list > li, ' +
+        'tbody tr, div.lists-detail__table-body-container tr, div[class*="lead-list"] tr'
+    );
+    rows.forEach((row) => {
+        if (row.querySelector('.lp-row-checkbox')) return;
+        const nameEl = row.querySelector(
+            '[data-anonymize="person-name"], a[href*="/sales/lead/"], a[href*="/sales/people/"], .artdeco-entity-lockup__title a, td:first-child a'
+        );
+        if (!nameEl) return;
+
+        const wrapper = document.createElement('label');
+        wrapper.className = 'lp-checkbox-wrap';
+        wrapper.innerHTML = `<input type="checkbox" class="lp-row-checkbox"><span class="lp-checkmark"></span>`;
+        wrapper.title = 'Select for LeadPilot';
+        wrapper.addEventListener('click', (e) => e.stopPropagation());
+
+        const checkbox = wrapper.querySelector('.lp-row-checkbox');
+        checkbox.addEventListener('change', (e) => {
+            e.stopPropagation();
+            if (checkbox.checked) {
+                const data = extractFromRow(row);
+                addToQueue(data);
+                row.classList.add('lp-row-selected');
+            } else {
+                const data = extractFromRow(row);
+                const idx = selectedLeads.findIndex(l => l.linkedinUrl === data.linkedinUrl);
+                if (idx >= 0) removeFromQueue(idx);
+                row.classList.remove('lp-row-selected');
+            }
+        });
+
+        const isTableRow = row.tagName === 'TR';
+        if (isTableRow) {
+            const td = document.createElement('td');
+            td.className = 'lp-checkbox-cell';
+            td.style.cssText = 'width:32px;min-width:32px;padding:0 2px;text-align:center;vertical-align:middle;';
+            td.appendChild(wrapper);
+            row.insertBefore(td, row.firstChild);
+        } else {
+            row.style.position = 'relative';
+            wrapper.classList.add('lp-checkbox-absolute');
+            row.insertBefore(wrapper, row.firstChild);
+        }
+    });
+}
+
+function updateSelectAllState() {
+    const selectAllCb = document.getElementById('lp-select-all-cb');
+    if (!selectAllCb) return;
+    const allCbs = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)');
+    const checkedCbs = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb):checked');
+    selectAllCb.checked = allCbs.length > 0 && checkedCbs.length === allCbs.length;
+    selectAllCb.indeterminate = checkedCbs.length > 0 && checkedCbs.length < allCbs.length;
+
+    // Update page count
+    const pageCount = document.getElementById('lp-page-count');
+    if (pageCount) {
+        pageCount.textContent = `(${checkedCbs.length}/${allCbs.length})`;
+    }
+}
+
+// =============================================
+// KEYBOARD SHORTCUTS
+// =============================================
+function initKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // Ctrl+L = Save all selected leads
+        if (e.ctrlKey && !e.shiftKey && e.key === 'l') {
+            e.preventDefault();
+            if (selectedLeads.length > 0) {
+                saveAllLeads();
+            }
+        }
+    });
 }
 
 // =============================================
@@ -237,7 +458,7 @@ function extractFromRow(row) {
         lastName = nameParts.slice(1).join(' ') || '';
     }
 
-    return { firstName, lastName, linkedinUrl, companyName, jobTitle, country, city, companyService: '' };
+    return { firstName, lastName, linkedinUrl, companyName, jobTitle, country, city, companyService: '', status: 'Pending' };
 }
 
 // =============================================
@@ -290,7 +511,7 @@ function extractFromProfile() {
     if (!fullName) { const t = document.title || ''; if (t.includes('|')) fullName = t.split('|')[0].split('-')[0].trim(); }
     if (fullName) { const np = fullName.trim().split(/\s+/); firstName = np[0] || ''; lastName = np.slice(1).join(' ') || ''; }
 
-    return { firstName, lastName, linkedinUrl, companyName, jobTitle, country, city, companyService };
+    return { firstName, lastName, linkedinUrl, companyName, jobTitle, country, city, companyService, status: 'Pending' };
 }
 
 // =============================================
@@ -333,9 +554,26 @@ function injectListCheckboxes() {
             }
         });
 
-        // Insert at beginning of row (before the first real cell content)
-        row.insertBefore(wrapper, row.firstChild);
+        // Dynamic positioning based on row type
+        const isTableRow = row.tagName === 'TR';
+        if (isTableRow) {
+            // For table rows: create a proper td cell
+            const td = document.createElement('td');
+            td.className = 'lp-checkbox-cell';
+            td.style.cssText = 'width:32px;min-width:32px;padding:0 2px;text-align:center;vertical-align:middle;';
+            td.appendChild(wrapper);
+            row.insertBefore(td, row.firstChild);
+        } else {
+            // For list/div rows: absolute position on the left
+            row.style.position = 'relative';
+            wrapper.classList.add('lp-checkbox-absolute');
+            row.insertBefore(wrapper, row.firstChild);
+        }
     });
+
+    // Inject Select All bar and update counts
+    injectSelectAll();
+    updateSelectAllState();
 }
 
 // =============================================
@@ -414,11 +652,12 @@ function injectPanel() {
       </button>
     </div>
 
-    <div id="lp-panel-body">
+    <div id="lp-panel-body" class="lp-collapsed">
       <div class="lp-section">
         <div class="lp-section-label">
           <span>Selected Leads</span>
           <span id="lp-count" class="lp-badge">0</span>
+          <span id="lp-total-count" class="lp-total-count"></span>
         </div>
         <div id="lp-cards-container" class="lp-cards-container">
           <div class="lp-empty-state">
@@ -435,10 +674,12 @@ function injectPanel() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           Save All to Sheet
         </button>
+        <span class="lp-shortcut-hint">Ctrl+L</span>
         <button id="lp-clear" class="lp-btn-clear">Clear Selection</button>
       </div>
 
       <div id="lp-status-bar" class="lp-status-bar"></div>
+      <div id="lp-undo-bar" class="lp-undo-bar" style="display:none;"></div>
     </div>
   `;
     document.body.appendChild(panel);
@@ -449,6 +690,9 @@ function injectPanel() {
         document.getElementById('lp-panel').classList.toggle('lp-minimized');
     });
 
+    // Start minimized
+    document.getElementById('lp-panel').classList.add('lp-minimized');
+
     document.getElementById('lp-save-all').addEventListener('click', saveAllLeads);
     document.getElementById('lp-clear').addEventListener('click', clearQueue);
 
@@ -457,6 +701,9 @@ function injectPanel() {
 
     // Initialize tab selector (with storage change listener)
     initTabSelector();
+
+    // Initialize keyboard shortcuts
+    initKeyboardShortcuts();
 }
 
 // =============================================
@@ -465,11 +712,18 @@ function injectPanel() {
 function renderPanel() {
     const container = document.getElementById('lp-cards-container');
     const countEl = document.getElementById('lp-count');
+    const totalCountEl = document.getElementById('lp-total-count');
     const saveBtn = document.getElementById('lp-save-all');
     if (!container) return;
 
     countEl.textContent = selectedLeads.length;
     saveBtn.disabled = selectedLeads.length === 0;
+
+    // Update lead count: X / Y on page
+    const totalOnPage = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)').length;
+    if (totalCountEl) {
+        totalCountEl.textContent = totalOnPage > 0 ? `/ ${totalOnPage} on page` : '';
+    }
 
     if (selectedLeads.length === 0) {
         container.innerHTML = `
@@ -488,7 +742,7 @@ function renderPanel() {
         <div class="lp-card-detail">${lead.jobTitle || '—'}</div>
         <div class="lp-card-detail">${lead.companyName || '—'} · ${lead.city || ''}${lead.country ? ', ' + lead.country : ''}</div>
       </div>
-      <button class="lp-card-remove" data-index="${i}" title="Remove">
+      <button class="lp-card-remove" data-index="${i}" title="Remove" aria-label="Remove lead">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
@@ -504,21 +758,321 @@ function renderPanel() {
 // =============================================
 async function saveAllLeads() {
     if (selectedLeads.length === 0) return;
-
-    const saveBtn = document.getElementById('lp-save-all');
-    const total = selectedLeads.length;
     const tabs = getSelectedTabs();
+    showReviewModal([...selectedLeads], tabs, false);
+}
 
-    console.log('[LeadPilot] Saving to tabs:', tabs);
+// =============================================
+// DUPLICATE CHECK
+// =============================================
+async function checkDuplicates(leads) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['savedLeadUrls'], (result) => {
+            const savedUrls = result.savedLeadUrls || [];
+            const checked = leads.map(lead => ({
+                ...lead,
+                isDuplicate: savedUrls.includes(lead.linkedinUrl)
+            }));
+            resolve(checked);
+        });
+    });
+}
 
+function saveDuplicateUrls(leads) {
+    chrome.storage.local.get(['savedLeadUrls'], (result) => {
+        const savedUrls = result.savedLeadUrls || [];
+        const newUrls = leads.map(l => l.linkedinUrl).filter(u => u && !savedUrls.includes(u));
+        chrome.storage.local.set({ savedLeadUrls: [...savedUrls, ...newUrls] });
+    });
+}
+
+// =============================================
+// REVIEW MODAL
+// =============================================
+async function showReviewModal(leads, tabs, isProfile = false) {
+    // Check for duplicates
+    const checkedLeads = await checkDuplicates(leads);
+
+    // Remove any existing modal
+    closeReviewModal();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'lp-review-overlay';
+    const isBulk = checkedLeads.length > 1;
+    const bulkApplyHTML = isBulk ? `
+        <div class="lp-bulk-apply-bar">
+            <div class="lp-bulk-apply-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                <span>Bulk Apply to All</span>
+            </div>
+            <div class="lp-bulk-apply-fields">
+                <div class="lp-review-field lp-field-industry">
+                    <label>Industry</label>
+                    <select id="lp-bulk-industry">
+                        <option value="">— Keep Individual —</option>
+                        ${INDUSTRY_OPTIONS.map(opt => `<option value="${opt}">${opt}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="lp-review-field lp-field-status">
+                    <label>Status</label>
+                    <select id="lp-bulk-status">
+                        <option value="">— Keep Individual —</option>
+                        ${STATUS_OPTIONS.map(opt => `<option value="${opt}">${opt}</option>`).join('')}
+                    </select>
+                </div>
+                <button id="lp-bulk-apply-btn" class="lp-bulk-apply-btn">Apply to All</button>
+            </div>
+        </div>
+    ` : '';
+
+    overlay.innerHTML = `
+    <div class="lp-review-modal">
+        <div class="lp-review-header">
+            <div class="lp-review-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
+                    <line x1="12" y1="22" x2="12" y2="15.5"/>
+                    <polyline points="22 8.5 12 15.5 2 8.5"/>
+                    <polyline points="2 15.5 12 8.5 22 15.5"/>
+                    <line x1="12" y1="2" x2="12" y2="8.5"/>
+                </svg>
+                <span>Review Before Saving</span>
+                <span class="lp-review-count">${checkedLeads.length} lead${checkedLeads.length > 1 ? 's' : ''}</span>
+            </div>
+            <button id="lp-review-close" class="lp-review-close-btn" title="Cancel">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="lp-review-tabs-info">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+            <span>Saving to: ${tabs.length > 0 ? tabs.join(', ') : 'Default sheet'}</span>
+        </div>
+        ${bulkApplyHTML}
+        <div class="lp-review-body" id="lp-review-body">
+            ${checkedLeads.map((lead, i) => renderReviewCard(lead, i)).join('')}
+        </div>
+        <div class="lp-review-footer">
+            <button id="lp-review-cancel" class="lp-review-btn lp-review-btn-cancel">Cancel</button>
+            <button id="lp-review-save" class="lp-review-btn lp-review-btn-save">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Confirm & Save
+            </button>
+        </div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+
+    // Animate in
+    requestAnimationFrame(() => overlay.classList.add('lp-review-visible'));
+
+    // Close handlers - stopPropagation to prevent bubbling issues
+    document.getElementById('lp-review-close').addEventListener('click', (e) => { e.stopPropagation(); closeReviewModal(); });
+    document.getElementById('lp-review-cancel').addEventListener('click', (e) => { e.stopPropagation(); closeReviewModal(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeReviewModal(); });
+
+    // Collapse/expand cards
+    overlay.querySelectorAll('.lp-review-card-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const card = header.closest('.lp-review-card');
+            card.classList.toggle('lp-review-card-collapsed');
+        });
+    });
+
+    // Remove lead from review
+    overlay.querySelectorAll('.lp-review-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const card = btn.closest('.lp-review-card');
+            card.style.transform = 'translateX(100%)';
+            card.style.opacity = '0';
+            setTimeout(() => {
+                card.remove();
+                const remaining = overlay.querySelectorAll('.lp-review-card');
+                overlay.querySelector('.lp-review-count').textContent = `${remaining.length} lead${remaining.length > 1 ? 's' : ''}`;
+                if (remaining.length === 0) closeReviewModal();
+            }, 250);
+        });
+    });
+
+    // Bulk apply button handler
+    const bulkApplyBtn = document.getElementById('lp-bulk-apply-btn');
+    if (bulkApplyBtn) {
+        bulkApplyBtn.addEventListener('click', () => {
+            const bulkIndustry = document.getElementById('lp-bulk-industry').value;
+            const bulkStatus = document.getElementById('lp-bulk-status').value;
+            if (bulkIndustry) {
+                overlay.querySelectorAll('[data-field="companyService"]').forEach(sel => { sel.value = bulkIndustry; });
+            }
+            if (bulkStatus) {
+                overlay.querySelectorAll('[data-field="status"]').forEach(sel => {
+                    sel.value = bulkStatus;
+                    const dot = sel.closest('.lp-status-select-wrap')?.querySelector('.lp-status-dot');
+                    if (dot) dot.style.background = getStatusColor(bulkStatus);
+                });
+            }
+            if (bulkIndustry || bulkStatus) {
+                bulkApplyBtn.textContent = '✓ Applied!';
+                bulkApplyBtn.style.background = 'rgba(34, 197, 94, 0.2)';
+                bulkApplyBtn.style.borderColor = 'rgba(34, 197, 94, 0.4)';
+                bulkApplyBtn.style.color = '#22c55e';
+                setTimeout(() => {
+                    bulkApplyBtn.textContent = 'Apply to All';
+                    bulkApplyBtn.style.background = '';
+                    bulkApplyBtn.style.borderColor = '';
+                    bulkApplyBtn.style.color = '';
+                }, 1500);
+            }
+        });
+    }
+
+    // Status color dot — update on change
+    overlay.querySelectorAll('.lp-status-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const dot = sel.closest('.lp-status-select-wrap')?.querySelector('.lp-status-dot');
+            if (dot) dot.style.background = getStatusColor(sel.value);
+        });
+    });
+
+    // Save handler
+    document.getElementById('lp-review-save').addEventListener('click', async () => {
+        const cards = overlay.querySelectorAll('.lp-review-card');
+        const editedLeads = [];
+        cards.forEach(card => {
+            editedLeads.push({
+                firstName: card.querySelector('[data-field="firstName"]').value,
+                lastName: card.querySelector('[data-field="lastName"]').value,
+                linkedinUrl: card.querySelector('[data-field="linkedinUrl"]').value,
+                companyName: card.querySelector('[data-field="companyName"]').value,
+                jobTitle: card.querySelector('[data-field="jobTitle"]').value,
+                country: card.querySelector('[data-field="country"]').value,
+                city: card.querySelector('[data-field="city"]').value,
+                companyService: card.querySelector('[data-field="companyService"]').value,
+                status: card.querySelector('[data-field="status"]').value,
+                notes: card.querySelector('[data-field="notes"]')?.value || ''
+            });
+        });
+        await saveFinalLeads(editedLeads, tabs, isProfile);
+    });
+}
+
+function getStatusColor(status) {
+    return STATUS_COLORS[status] || '#94a3b8';
+}
+
+function renderReviewCard(lead, index) {
+    const industryOptions = INDUSTRY_OPTIONS.map(opt => {
+        const selected = (lead.companyService && lead.companyService.toLowerCase().includes(opt.toLowerCase())) ? 'selected' : '';
+        return `<option value="${opt}" ${selected}>${opt}</option>`;
+    }).join('');
+    const hasMatch = INDUSTRY_OPTIONS.some(opt => lead.companyService && lead.companyService.toLowerCase().includes(opt.toLowerCase()));
+
+    const statusOptions = STATUS_OPTIONS.map(opt => {
+        const selected = (lead.status === opt) ? 'selected' : '';
+        const color = getStatusColor(opt);
+        return `<option value="${opt}" ${selected} style="color:${color};font-weight:600;">${opt}</option>`;
+    }).join('');
+
+    const dupBadge = lead.isDuplicate ? `<span class="lp-dup-badge">⚠ Duplicate</span>` : '';
+    const statusColor = getStatusColor(lead.status || 'Pending');
+
+    return `
+    <div class="lp-review-card ${lead.isDuplicate ? 'lp-review-card-dup' : ''}" data-index="${index}">
+        <div class="lp-review-card-header">
+            <div class="lp-review-card-avatar">${(lead.firstName?.[0] || '?').toUpperCase()}</div>
+            <div class="lp-review-card-title">
+                <span class="lp-review-card-name">${lead.firstName} ${lead.lastName}</span>
+                <span class="lp-review-card-sub">${lead.jobTitle || 'No title'} · ${lead.companyName || 'No company'}</span>
+            </div>
+            ${dupBadge}
+            <button class="lp-review-remove" title="Remove" aria-label="Remove lead">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            <svg class="lp-review-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="lp-review-card-body">
+            <div class="lp-review-row">
+                <div class="lp-review-field">
+                    <label>First Name</label>
+                    <input type="text" data-field="firstName" value="${escapeAttr(lead.firstName)}" placeholder="Enter first name" />
+                </div>
+                <div class="lp-review-field">
+                    <label>Last Name</label>
+                    <input type="text" data-field="lastName" value="${escapeAttr(lead.lastName)}" placeholder="Enter last name" />
+                </div>
+            </div>
+            <div class="lp-review-field">
+                <label>LinkedIn URL</label>
+                <input type="text" data-field="linkedinUrl" value="${escapeAttr(lead.linkedinUrl)}" placeholder="LinkedIn profile URL" />
+            </div>
+            <div class="lp-review-row">
+                <div class="lp-review-field">
+                    <label>Company</label>
+                    <input type="text" data-field="companyName" value="${escapeAttr(lead.companyName)}" placeholder="Company name" />
+                </div>
+                <div class="lp-review-field">
+                    <label>Job Title</label>
+                    <input type="text" data-field="jobTitle" value="${escapeAttr(lead.jobTitle)}" placeholder="Job title" />
+                </div>
+            </div>
+            <div class="lp-review-row">
+                <div class="lp-review-field">
+                    <label>Country</label>
+                    <input type="text" data-field="country" value="${escapeAttr(lead.country)}" placeholder="Country" />
+                </div>
+                <div class="lp-review-field">
+                    <label>City</label>
+                    <input type="text" data-field="city" value="${escapeAttr(lead.city)}" placeholder="City" />
+                </div>
+            </div>
+            <div class="lp-review-row">
+                <div class="lp-review-field lp-field-industry">
+                    <label>Industry</label>
+                    <select data-field="companyService">
+                        <option value="">— Select Industry —</option>
+                        ${industryOptions}
+                        ${!hasMatch && lead.companyService ? `<option value="${escapeAttr(lead.companyService)}" selected>${escapeAttr(lead.companyService)}</option>` : ''}
+                    </select>
+                </div>
+                <div class="lp-review-field lp-field-status">
+                    <label>Status</label>
+                    <div class="lp-status-select-wrap">
+                        <span class="lp-status-dot" style="background:${statusColor}"></span>
+                        <select data-field="status" class="lp-status-select">
+                            ${statusOptions}
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="lp-review-field lp-field-notes">
+                <label>Notes</label>
+                <textarea data-field="notes" class="lp-notes-textarea" rows="2" placeholder="Add personal notes about this lead..."></textarea>
+            </div>
+        </div>
+    </div>`;
+}
+
+function escapeAttr(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function closeReviewModal() {
+    const overlay = document.getElementById('lp-review-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('lp-review-visible');
+    setTimeout(() => overlay.remove(), 250);
+}
+
+async function saveFinalLeads(leads, tabs, isProfile) {
+    const saveBtn = document.getElementById('lp-review-save');
+    const total = leads.length;
     saveBtn.disabled = true;
     saveBtn.innerHTML = `<span class="lp-spinner"></span> Saving 0/${total}...`;
-    updateStatus('Saving leads...', '#818cf8');
 
     let saved = 0, failed = 0;
 
-    for (let i = 0; i < selectedLeads.length; i++) {
-        const lead = selectedLeads[i];
+    for (let i = 0; i < leads.length; i++) {
+        const lead = leads[i];
         try {
             await new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage({
@@ -543,19 +1097,95 @@ async function saveAllLeads() {
     }
 
     if (failed === 0) {
-        const tabInfo = tabs.length > 0 ? ` → ${tabs.join(', ')}` : '';
-        updateStatus(`✓ ${saved} lead${saved > 1 ? 's' : ''} saved!${tabInfo}`, '#34d399');
-        saveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Saved!`;
+        // Store URLs for duplicate checking
+        saveDuplicateUrls(leads);
+        saveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> All Saved!`;
+        updateStatus(`✓ ${saved} lead${saved > 1 ? 's' : ''} saved!`, '#34d399');
+
+        // Store for undo
+        lastSavedLeads = { leads: [...leads], tabs: [...tabs], isProfile };
+
         setTimeout(() => {
-            clearQueue();
-            saveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save All to Sheet`;
-            saveBtn.disabled = true;
-        }, 2500);
+            closeReviewModal();
+            if (!isProfile) clearQueue();
+            showUndoToast(leads.length);
+        }, 1000);
     } else {
-        updateStatus(`${saved} saved, ${failed} failed`, '#f87171');
-        saveBtn.innerHTML = `${saved} saved, ${failed} failed — Retry?`;
+        saveBtn.innerHTML = `${saved} saved, ${failed} failed — Close & Retry`;
         saveBtn.disabled = false;
+        updateStatus(`${saved} saved, ${failed} failed`, '#f87171');
     }
+}
+
+// =============================================
+// UNDO SAVE (5-second toast)
+// =============================================
+function showUndoToast(count) {
+    // Clear previous undo timer
+    if (undoTimeout) clearTimeout(undoTimeout);
+
+    const undoBar = document.getElementById('lp-undo-bar');
+    if (!undoBar) return;
+
+    let secondsLeft = 5;
+    undoBar.style.display = 'flex';
+    undoBar.innerHTML = `
+        <span class="lp-undo-text">✓ ${count} lead${count > 1 ? 's' : ''} saved</span>
+        <button id="lp-undo-btn" class="lp-undo-btn">Undo (${secondsLeft}s)</button>
+    `;
+
+    const undoBtn = document.getElementById('lp-undo-btn');
+    const countdown = setInterval(() => {
+        secondsLeft--;
+        if (secondsLeft <= 0) {
+            clearInterval(countdown);
+            undoBar.style.display = 'none';
+            lastSavedLeads = null;
+            return;
+        }
+        if (undoBtn) undoBtn.textContent = `Undo (${secondsLeft}s)`;
+    }, 1000);
+
+    undoTimeout = setTimeout(() => {
+        clearInterval(countdown);
+        undoBar.style.display = 'none';
+        lastSavedLeads = null;
+    }, 5000);
+
+    undoBtn.addEventListener('click', () => {
+        clearTimeout(undoTimeout);
+        clearInterval(countdown);
+
+        if (lastSavedLeads) {
+            undoBtn.textContent = 'Undoing...';
+            undoBtn.disabled = true;
+
+            // Remove URLs from local duplicate list
+            chrome.storage.local.get(['savedLeadUrls'], (result) => {
+                const savedUrls = result.savedLeadUrls || [];
+                const toRemove = lastSavedLeads.leads.map(l => l.linkedinUrl);
+                const filtered = savedUrls.filter(u => !toRemove.includes(u));
+                chrome.storage.local.set({ savedLeadUrls: filtered });
+            });
+
+            // Delete from Google Sheet
+            chrome.runtime.sendMessage({
+                action: 'deleteLead',
+                linkedinUrls: lastSavedLeads.leads.map(l => l.linkedinUrl),
+                selectedTabs: lastSavedLeads.tabs
+            }, (response) => {
+                undoBar.style.display = 'none';
+                if (response && response.success) {
+                    updateStatus('\u21a9 Undo successful \u2014 leads removed from sheet', '#34d399');
+                } else {
+                    updateStatus('\u21a9 Undo: removed locally, sheet delete may have failed', '#fbbf24');
+                }
+                lastSavedLeads = null;
+            });
+        } else {
+            undoBar.style.display = 'none';
+        }
+    });
 }
 
 // =============================================
@@ -606,32 +1236,11 @@ function injectProfilePanel() {
         document.getElementById('lp-panel').classList.toggle('lp-minimized');
     });
 
-    // Save profile
+    // Save profile — open review modal
     document.getElementById('lp-save-profile').addEventListener('click', () => {
         const data = extractFromProfile();
         const tabs = getSelectedTabs();
-        const btn = document.getElementById('lp-save-profile');
-        btn.innerHTML = '<span class="lp-spinner"></span> Saving...';
-        btn.disabled = true;
-        console.log('[LeadPilot] Saving profile to tabs:', tabs);
-        chrome.runtime.sendMessage({
-            action: 'saveLead',
-            data,
-            selectedTabs: tabs
-        }, (resp) => {
-            if (resp?.success) {
-                btn.innerHTML = '✓ Saved!';
-                updateStatus(resp.message || 'Lead saved!', '#34d399');
-            } else {
-                btn.innerHTML = '✗ Failed';
-                btn.disabled = false;
-                updateStatus(resp?.error || 'Save failed', '#f87171');
-            }
-            setTimeout(() => {
-                btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save Lead`;
-                btn.disabled = false;
-            }, 2500);
-        });
+        showReviewModal([data], tabs, true);
     });
 
     // Copy templates
@@ -696,15 +1305,21 @@ function main() {
         lastUrl = currentUrl;
         const oldPanel = document.getElementById('lp-panel');
         if (oldPanel) oldPanel.remove();
+        const oldSelectAll = document.getElementById('lp-select-all-bar');
+        if (oldSelectAll) oldSelectAll.remove();
         document.querySelectorAll('.lp-checkbox-wrap').forEach(el => el.remove());
         selectedLeads = [];
     }
 
-    if (pageType === 'list') {
-        injectListCheckboxes();
-        injectPanel();
-    } else if (pageType === 'profile' || pageType === 'linkedin-profile') {
-        injectProfilePanel();
+    try {
+        if (pageType === 'list') {
+            injectListCheckboxes();
+            injectPanel();
+        } else if (pageType === 'profile' || pageType === 'linkedin-profile') {
+            injectProfilePanel();
+        }
+    } catch (err) {
+        console.error('[LeadPilot] Main loop error:', err);
     }
 }
 

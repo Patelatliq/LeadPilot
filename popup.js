@@ -24,6 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (result.messageTemplate) messageTemplateInput.value = result.messageTemplate;
     sheetTabs = result.sheetTabs || [];
     renderTabs();
+    // Auto-fetch tabs from server on popup open
+    if (result.webAppUrl) fetchTabNames(result.webAppUrl);
   });
 
   // ---------------------------
@@ -59,15 +61,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const response = await fetch(url);
       const data = await response.json();
       if (data.sheets && data.sheets.length > 0) {
-        // Merge with existing tabs (keep custom ones)
-        const newTabs = data.sheets.filter(t => !sheetTabs.includes(t));
-        sheetTabs = [...sheetTabs, ...newTabs];
-        // Remove duplicates
-        sheetTabs = [...new Set(sheetTabs)];
+        // Replace local tabs entirely with server response
+        // This ensures deleted tabs are removed
+        sheetTabs = [...new Set(data.sheets)];
         chrome.storage.sync.set({ sheetTabs });
         renderTabs();
         showStatus(`✓ Found ${data.sheets.length} tab(s)`, 'success');
       } else {
+        // No tabs on server — clear local list
+        sheetTabs = [];
+        chrome.storage.sync.set({ sheetTabs });
+        renderTabs();
         showStatus('✓ Connected — no tabs found yet', 'success');
       }
     } catch (err) {
