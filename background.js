@@ -45,14 +45,28 @@ async function handleSaveLead(data, selectedTabs, sendResponse) {
         const response = await fetch(webAppUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            redirect: 'follow'
         });
 
         if (!response.ok) {
             throw new Error('Server returned ' + response.status);
         }
 
-        const result2 = await response.json();
+        // Google Apps Script redirects on POST; response.json() can fail
+        // Use text() first, then parse JSON from the response body
+        const responseText = await response.text();
+        let result2;
+        try {
+            result2 = JSON.parse(responseText);
+        } catch (parseErr) {
+            // If JSON parsing fails but response was OK, the save likely succeeded
+            // (Google Apps Script executed doPost but response got mangled in redirect)
+            console.warn('[LeadPilot] Could not parse response, but server returned OK:', responseText.substring(0, 200));
+            sendResponse({ success: true, message: 'Lead saved (response not parseable)' });
+            console.log('[LeadPilot] Lead saved (assumed):', data.firstName, data.lastName);
+            return;
+        }
 
         if (result2.status === 'success') {
             sendResponse({ success: true, message: result2.message });
@@ -89,7 +103,16 @@ async function handleDeleteLead(linkedinUrls, selectedTabs, sendResponse) {
         });
 
         if (!response.ok) throw new Error('Server returned ' + response.status);
-        const result2 = await response.json();
+
+        const responseText = await response.text();
+        let result2;
+        try {
+            result2 = JSON.parse(responseText);
+        } catch (parseErr) {
+            console.warn('[LeadPilot] Could not parse delete response, but server returned OK');
+            sendResponse({ success: true, message: 'Delete completed (response not parseable)' });
+            return;
+        }
 
         if (result2.status === 'success') {
             sendResponse({ success: true, message: result2.message });

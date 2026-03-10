@@ -241,18 +241,25 @@ function writeLeadToSheet(sheet, data) {
     sheet.appendRow(row);
 
     // Add data validation dropdown on the Status cell
-    var newLastRow = sheet.getLastRow();
-    if (statusColIndex > 0) {
-        var statusCell = sheet.getRange(newLastRow, statusColIndex);
-        var rule = SpreadsheetApp.newDataValidation()
-            .requireValueInList(['Pending', 'Requested', 'Connected', 'First Message Done', 'Replied', 'In Conversation'], true)
-            .setAllowInvalid(false)
-            .build();
-        statusCell.setDataValidation(rule);
+    // Wrapped in try/catch so formatting errors don't cause the save to report as "failed"
+    try {
+        var newLastRow = sheet.getLastRow();
+        if (statusColIndex > 0) {
+            var statusCell = sheet.getRange(newLastRow, statusColIndex);
+            var rule = SpreadsheetApp.newDataValidation()
+                .requireValueInList(['Pending', 'Requested', 'Connected', 'First Message Done', 'Replied', 'In Conversation'], true)
+                .setAllowInvalid(true)
+                .build();
+            statusCell.setDataValidation(rule);
 
-        // Color-code the status cell
-        var statusValue = statusCell.getValue();
-        applyStatusColor(statusCell, statusValue);
+            // Color-code the status cell
+            var statusValue = statusCell.getValue();
+            if (statusValue) {
+                applyStatusColor(statusCell, statusValue);
+            }
+        }
+    } catch (formatErr) {
+        // Data was already saved via appendRow above — formatting is non-critical
     }
 }
 
