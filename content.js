@@ -79,6 +79,9 @@ function getPageType() {
 let selectedLeads = [];
 let lastSavedLeads = null; // For undo functionality
 let undoTimeout = null;
+const pendingProfileFetches = new Map(); // linkedinUrl -> Promise
+const linkedInProfileUrlCache = new Map(); // salesNavUrl -> linkedinProfileUrl
+let lastObservedProfileUrl = '';
 
 function addToQueue(data) {
     if (selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl)) return false;
@@ -92,18 +95,13 @@ function removeFromQueue(index) {
     const removed = selectedLeads[index];
     selectedLeads.splice(index, 1);
 
-    // Deselect the corresponding checkbox on the page
+    // Remove highlight from the corresponding row on the page
     if (removed && removed.linkedinUrl) {
-        document.querySelectorAll('.lp-row-checkbox').forEach(cb => {
-            const row = cb.closest('tr, li, div[data-view-name]');
-            if (!row) return;
-            const linkEl = row.querySelector('a[href*="/sales/lead/"], a[href*="/sales/people/"], .artdeco-entity-lockup__title a');
-            if (linkEl) {
-                const rowUrl = linkEl.href.split('?')[0];
-                if (rowUrl === removed.linkedinUrl) {
-                    cb.checked = false;
-                    row.classList.remove('lp-row-selected');
-                }
+        document.querySelectorAll('[data-lp-hooked] a[href*="/sales/lead/"], [data-lp-hooked] a[href*="/sales/people/"]').forEach(linkEl => {
+            const rowUrl = linkEl.href.split('?')[0];
+            if (rowUrl === removed.linkedinUrl) {
+                const row = linkEl.closest('tr, li, div[data-view-name]');
+                if (row) row.classList.remove('lp-row-selected');
             }
         });
     }
@@ -114,14 +112,13 @@ function removeFromQueue(index) {
 
 function clearQueue() {
     selectedLeads = [];
-    document.querySelectorAll('.lp-row-checkbox:checked').forEach(cb => cb.checked = false);
     document.querySelectorAll('.lp-row-selected').forEach(el => el.classList.remove('lp-row-selected'));
     renderPanel();
     updateSelectAllState();
 }
 
 // =============================================
-// SELECT ALL CHECKBOX
+// SELECT ALL FOR LEADPILOT
 // =============================================
 function injectSelectAll() {
     try {
@@ -138,7 +135,7 @@ function injectSelectAll() {
             <label class="lp-select-all-label">
                 <input type="checkbox" id="lp-select-all-cb" class="lp-row-checkbox">
                 <span class="lp-checkmark"></span>
-                <span class="lp-select-all-text">Select All on Page</span>
+                <span class="lp-select-all-text">Select All for LeadPilot</span>
                 <span id="lp-page-count" class="lp-page-count"></span>
             </label>
         `;
@@ -149,26 +146,34 @@ function injectSelectAll() {
             const textEl = bar.querySelector('.lp-select-all-text');
 
             if (checked) {
-                // Scroll through the page to force LinkedIn to render all lazy-loaded rows
                 textEl.textContent = 'Loading all leads...';
                 await scrollToLoadAllRows();
-                // Inject checkboxes on any new rows that appeared
-                injectListCheckboxes_noSelectAll();
+                // Hook any newly loaded rows
+                hookLinkedInCheckboxes(true);
+                // Extract all hooked rows into LeadPilot queue
+                selectAllRowsForLeadPilot();
+            } else {
+                // Deselect all from LeadPilot
+                clearQueue();
             }
-
-            // Now select/deselect all checkboxes
-            document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)').forEach(cb => {
-                if (cb.checked !== checked) {
-                    cb.checked = checked;
-                    cb.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            });
-            textEl.textContent = 'Select All on Page';
+            textEl.textContent = 'Select All for LeadPilot';
             updateSelectAllState();
         });
     } catch (err) {
         console.warn('[LeadPilot] Select All injection skipped:', err.message);
     }
+}
+
+function selectAllRowsForLeadPilot() {
+    const rows = document.querySelectorAll('[data-lp-hooked]');
+    rows.forEach(row => {
+        if (row.classList.contains('lp-row-selected')) return;
+        const data = extractFromRow(row);
+        if (data.linkedinUrl) {
+            addToQueue(data);
+            row.classList.add('lp-row-selected');
+        }
+    });
 }
 
 // Scroll the results container to load all lazy rows
@@ -214,67 +219,23 @@ function scrollToLoadAllRows() {
 }
 
 // Inject checkboxes without re-calling injectSelectAll (avoids recursion)
+// This function is kept as a compatibility stub — now just hooks new rows
 function injectListCheckboxes_noSelectAll() {
-    const rows = document.querySelectorAll(
-        'tr.artdeco-models-table-row, li.artdeco-list__item, ' +
-        'div[data-view-name="lead-lists-lead-detail-view"], ol.artdeco-list > li, ' +
-        'tbody tr, div.lists-detail__table-body-container tr, div[class*="lead-list"] tr'
-    );
-    rows.forEach((row) => {
-        if (row.querySelector('.lp-row-checkbox')) return;
-        const nameEl = row.querySelector(
-            '[data-anonymize="person-name"], a[href*="/sales/lead/"], a[href*="/sales/people/"], .artdeco-entity-lockup__title a, td:first-child a'
-        );
-        if (!nameEl) return;
-
-        const wrapper = document.createElement('label');
-        wrapper.className = 'lp-checkbox-wrap';
-        wrapper.innerHTML = `<input type="checkbox" class="lp-row-checkbox"><span class="lp-checkmark"></span>`;
-        wrapper.title = 'Select for LeadPilot';
-        wrapper.addEventListener('click', (e) => e.stopPropagation());
-
-        const checkbox = wrapper.querySelector('.lp-row-checkbox');
-        checkbox.addEventListener('change', (e) => {
-            e.stopPropagation();
-            if (checkbox.checked) {
-                const data = extractFromRow(row);
-                addToQueue(data);
-                row.classList.add('lp-row-selected');
-            } else {
-                const data = extractFromRow(row);
-                const idx = selectedLeads.findIndex(l => l.linkedinUrl === data.linkedinUrl);
-                if (idx >= 0) removeFromQueue(idx);
-                row.classList.remove('lp-row-selected');
-            }
-        });
-
-        const isTableRow = row.tagName === 'TR';
-        if (isTableRow) {
-            const td = document.createElement('td');
-            td.className = 'lp-checkbox-cell';
-            td.style.cssText = 'width:32px;min-width:32px;padding:0 2px;text-align:center;vertical-align:middle;';
-            td.appendChild(wrapper);
-            row.insertBefore(td, row.firstChild);
-        } else {
-            row.style.position = 'relative';
-            wrapper.classList.add('lp-checkbox-absolute');
-            row.insertBefore(wrapper, row.firstChild);
-        }
-    });
+    hookLinkedInCheckboxes(true);
 }
 
 function updateSelectAllState() {
     const selectAllCb = document.getElementById('lp-select-all-cb');
     if (!selectAllCb) return;
-    const allCbs = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)');
-    const checkedCbs = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb):checked');
-    selectAllCb.checked = allCbs.length > 0 && checkedCbs.length === allCbs.length;
-    selectAllCb.indeterminate = checkedCbs.length > 0 && checkedCbs.length < allCbs.length;
+    const allRows = document.querySelectorAll('[data-lp-hooked]');
+    const selectedRows = document.querySelectorAll('[data-lp-hooked].lp-row-selected');
+    selectAllCb.checked = allRows.length > 0 && selectedRows.length === allRows.length;
+    selectAllCb.indeterminate = selectedRows.length > 0 && selectedRows.length < allRows.length;
 
     // Update page count
     const pageCount = document.getElementById('lp-page-count');
     if (pageCount) {
-        pageCount.textContent = `(${checkedCbs.length}/${allCbs.length})`;
+        pageCount.textContent = `(${selectedRows.length}/${allRows.length})`;
     }
 }
 
@@ -298,7 +259,7 @@ function initKeyboardShortcuts() {
 // =============================================
 function getTabSelectorHTML() {
     return `
-    <div class="lp-section lp-tab-section">
+    <div class="lp-section lp-tab-section" id="lp-tab-section">
         <div class="lp-section-label">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
             <span>Save To</span>
@@ -309,8 +270,14 @@ function getTabSelectorHTML() {
                 </svg>
             </button>
         </div>
-        <div id="lp-tab-checkboxes" class="lp-tab-checks">
-            <span class="lp-tab-hint">Loading tabs...</span>
+        <button id="lp-tab-selector-btn" class="lp-tab-selector-btn">
+            <span id="lp-tab-selector-label">No tabs selected</span>
+            <svg class="lp-tab-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="lp-tab-dropdown" class="lp-tab-dropdown">
+            <div id="lp-tab-checkboxes" class="lp-tab-checks">
+                <span class="lp-tab-hint">Loading tabs...</span>
+            </div>
         </div>
     </div>`;
 }
@@ -325,7 +292,7 @@ function initTabSelector() {
         }
     });
 
-    // Refresh button
+    // Set up dropdown toggle and outside-click close (once)
     setTimeout(() => {
         const refreshBtn = document.getElementById('lp-refresh-tabs');
         if (refreshBtn) {
@@ -337,7 +304,27 @@ function initTabSelector() {
                 setTimeout(() => { refreshBtn.style.transform = ''; }, 400);
             });
         }
-    }, 100);
+
+        const selectorBtn = document.getElementById('lp-tab-selector-btn');
+        const dropdown = document.getElementById('lp-tab-dropdown');
+        if (selectorBtn && dropdown) {
+            selectorBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = dropdown.classList.contains('lp-tab-dropdown-open');
+                dropdown.classList.toggle('lp-tab-dropdown-open', !isOpen);
+                const chevron = selectorBtn.querySelector('.lp-tab-chevron');
+                if (chevron) chevron.style.transform = !isOpen ? 'rotate(180deg)' : '';
+            });
+            document.addEventListener('click', (e) => {
+                const section = document.getElementById('lp-tab-section');
+                if (section && !section.contains(e.target)) {
+                    dropdown.classList.remove('lp-tab-dropdown-open');
+                    const chevron = selectorBtn.querySelector('.lp-tab-chevron');
+                    if (chevron) chevron.style.transform = '';
+                }
+            });
+        }
+    }, 150);
 }
 
 function loadAndRenderTabs() {
@@ -349,12 +336,26 @@ function loadAndRenderTabs() {
     });
 }
 
+function updateTabSelectorLabel(tabs, selected) {
+    const label = document.getElementById('lp-tab-selector-label');
+    if (!label) return;
+    const activeTabs = tabs.filter(t => selected.includes(t));
+    if (activeTabs.length === 0) {
+        label.textContent = 'No tabs selected';
+    } else if (activeTabs.length <= 2) {
+        label.textContent = activeTabs.join(', ');
+    } else {
+        label.textContent = activeTabs.slice(0, 2).join(', ') + ` +${activeTabs.length - 2}`;
+    }
+}
+
 function renderTabCheckboxes(tabs, selected) {
     const container = document.getElementById('lp-tab-checkboxes');
     if (!container) return;
 
     if (tabs.length === 0) {
-        container.innerHTML = `<span class="lp-tab-hint">Open LeadPilot popup → add your sheet tab names</span>`;
+        container.innerHTML = `<span class="lp-tab-hint">Open LeadPilot popup → add tab names</span>`;
+        updateTabSelectorLabel([], []);
         return;
     }
 
@@ -374,9 +375,12 @@ function renderTabCheckboxes(tabs, selected) {
         cb.addEventListener('change', () => {
             const selectedTabs = getSelectedTabs();
             chrome.storage.sync.set({ selectedTabs });
-            console.log('[LeadPilot] Tabs selected:', selectedTabs);
+            updateTabSelectorLabel(tabs, selectedTabs);
         });
     });
+
+    // Update label to reflect current selection
+    updateTabSelectorLabel(tabs, selected);
 }
 
 function getSelectedTabs() {
@@ -458,7 +462,143 @@ function extractFromRow(row) {
         lastName = nameParts.slice(1).join(' ') || '';
     }
 
-    return { firstName, lastName, linkedinUrl, companyName, jobTitle, country, city, companyService: '', status: 'Pending' };
+    // Try to find the LinkedIn /in/ profile URL — cache first (populated by MutationObserver)
+    let linkedinProfileUrl = linkedInProfileUrlCache.get(linkedinUrl) || '';
+    if (!linkedinProfileUrl) {
+        const profileLinkEl = row.querySelector('a[href*="linkedin.com/in/"], a[href*="/in/"]');
+        if (profileLinkEl && !profileLinkEl.href.includes('/sales/')) {
+            linkedinProfileUrl = profileLinkEl.href.split('?')[0];
+            if (linkedinProfileUrl.startsWith('/')) linkedinProfileUrl = 'https://www.linkedin.com' + linkedinProfileUrl;
+        }
+    }
+
+    return { firstName, lastName, linkedinUrl, linkedinProfileUrl, companyName, jobTitle, country, city, companyService: '', status: 'Pending' };
+}
+
+// =============================================
+// FETCH LINKEDIN PROFILE URL FROM SALES NAV PAGE
+// =============================================
+// =============================================
+// MUTATION OBSERVER — capture LinkedIn profile URLs
+// from Sales Navigator's own preview panels / dropdowns
+// =============================================
+
+function initProfileUrlObserver() {
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+                // Collect all linkedin.com/in/ links in the new subtree
+                const allLinks = [];
+                if (node.matches?.('a[href*="linkedin.com/in/"]')) allLinks.push(node);
+                node.querySelectorAll?.('a[href*="linkedin.com/in/"]').forEach(l => allLinks.push(l));
+
+                for (const link of allLinks) {
+                    const href = link.href || '';
+                    if (!href || href.includes('/sales/')) continue;
+                    const profileUrl = href.split('?')[0];
+
+                    // Look for the associated Sales Navigator URL in the same panel
+                    const panel = link.closest(
+                        '[class*="profile"], [class*="preview"], [class*="detail"], ' +
+                        '[class*="sidebar"], [class*="drawer"], [class*="entity"], ' +
+                        '[class*="result"], [class*="lead"]'
+                    ) || link.parentElement;
+
+                    const salesLink = panel?.querySelector('a[href*="/sales/lead/"], a[href*="/sales/people/"]');
+                    if (salesLink) {
+                        const salesUrl = salesLink.href.split('?')[0];
+                        linkedInProfileUrlCache.set(salesUrl, profileUrl);
+
+                        // Immediately update any matching queued lead
+                        const lead = selectedLeads.find(l => l.linkedinUrl === salesUrl);
+                        if (lead && !lead.linkedinProfileUrl) {
+                            lead.linkedinProfileUrl = profileUrl;
+                            pendingProfileFetches.delete(salesUrl);
+                        }
+                    } else {
+                        // No Sales Nav link nearby — store as most recently observed
+                        lastObservedProfileUrl = profileUrl;
+                    }
+                }
+            }
+        }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+}
+
+// Search the current page's embedded JSON data (no network request needed)
+function findPublicIdOnCurrentPage(salesNavUrl) {
+    try {
+        const handle = salesNavUrl.match(/\/sales\/(?:lead|people)\/([A-Za-z0-9_-]+)/)?.[1];
+        if (!handle) return '';
+
+        // Search <code> elements — LinkedIn embeds SSR data here
+        for (const code of document.querySelectorAll('code')) {
+            const text = code.textContent;
+            if (!text || !text.includes(handle)) continue;
+            const m = text.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m) return 'https://www.linkedin.com/in/' + m[1];
+        }
+
+        // Search JSON script tags
+        for (const script of document.querySelectorAll('script[type="application/json"]')) {
+            const text = script.textContent;
+            if (!text || !text.includes(handle)) continue;
+            const m = text.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m) return 'https://www.linkedin.com/in/' + m[1];
+        }
+    } catch(e) {}
+    return '';
+}
+
+async function fetchLinkedInProfileUrl(salesNavUrl) {
+    // Strategy 1: search current page's embedded data (instant, no fetch)
+    const pageResult = findPublicIdOnCurrentPage(salesNavUrl);
+    if (pageResult) return pageResult;
+
+    // Strategy 2: fetch the Sales Navigator profile page HTML
+    try {
+        const resp = await fetch(salesNavUrl, {
+            credentials: 'include',
+            headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }
+        });
+        if (resp.ok) {
+            const html = await resp.text();
+            const m1 = html.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m1) return 'https://www.linkedin.com/in/' + m1[1];
+            const m2 = html.match(/"vanityName"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m2) return 'https://www.linkedin.com/in/' + m2[1];
+            const m3 = html.match(/href="(https:\/\/www\.linkedin\.com\/in\/[^"?#]+)/);
+            if (m3) return m3[1];
+        }
+    } catch(e) {}
+
+    // Strategy 3: Sales Navigator internal API
+    try {
+        const handle = salesNavUrl.match(/\/sales\/(?:lead|people)\/([^,?#]+)/)?.[1];
+        const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1] || 'ajax:0';
+        if (handle) {
+            const apiUrl = `https://www.linkedin.com/sales-api/salesApiProfiles?handles=${encodeURIComponent(handle)}&decorationId=com.linkedin.sales.deco.desktop.openlink.SalesProfile-7`;
+            const apiResp = await fetch(apiUrl, {
+                credentials: 'include',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-RestLi-Protocol-Version': '2.0.0',
+                    'Csrf-Token': csrf,
+                }
+            });
+            if (apiResp.ok) {
+                const text = await apiResp.text();
+                const m = text.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+                if (m) return 'https://www.linkedin.com/in/' + m[1];
+            }
+        }
+    } catch(e) {}
+
+    return '';
 }
 
 // =============================================
@@ -511,13 +651,26 @@ function extractFromProfile() {
     if (!fullName) { const t = document.title || ''; if (t.includes('|')) fullName = t.split('|')[0].split('-')[0].trim(); }
     if (fullName) { const np = fullName.trim().split(/\s+/); firstName = np[0] || ''; lastName = np.slice(1).join(' ') || ''; }
 
-    return { firstName, lastName, linkedinUrl, companyName, jobTitle, country, city, companyService, status: 'Pending' };
+    // Try to find the regular LinkedIn /in/ profile URL on the Sales Navigator profile page
+    let linkedinProfileUrl = '';
+    const profileLink = document.querySelector(
+        'a[href*="linkedin.com/in/"]:not([href*="/sales/"]), ' +
+        'a[href*="/in/"][target="_blank"]:not([href*="/sales/"]), ' +
+        '[data-control-name="view_member_profile"] a, ' +
+        'a[aria-label*="LinkedIn profile"]'
+    );
+    if (profileLink) {
+        linkedinProfileUrl = profileLink.href.split('?')[0];
+        if (linkedinProfileUrl.startsWith('/')) linkedinProfileUrl = 'https://www.linkedin.com' + linkedinProfileUrl;
+    }
+
+    return { firstName, lastName, linkedinUrl, linkedinProfileUrl, companyName, jobTitle, country, city, companyService, status: 'Pending' };
 }
 
 // =============================================
-// INJECT CHECKBOXES ON LIST ROWS
+// HOOK LINKEDIN'S NATIVE CHECKBOXES
 // =============================================
-function injectListCheckboxes() {
+function hookLinkedInCheckboxes(skipSelectAll = false) {
     const rows = document.querySelectorAll(
         'tr.artdeco-models-table-row, li.artdeco-list__item, ' +
         'div[data-view-name="lead-lists-lead-detail-view"], ol.artdeco-list > li, ' +
@@ -525,55 +678,114 @@ function injectListCheckboxes() {
     );
 
     rows.forEach((row) => {
-        if (row.querySelector('.lp-row-checkbox')) return;
+        if (row.dataset.lpHooked) return;
+
         const nameEl = row.querySelector(
             '[data-anonymize="person-name"], a[href*="/sales/lead/"], a[href*="/sales/people/"], .artdeco-entity-lockup__title a, td:first-child a'
         );
         if (!nameEl) return;
 
-        const wrapper = document.createElement('label');
-        wrapper.className = 'lp-checkbox-wrap';
-        wrapper.innerHTML = `<input type="checkbox" class="lp-row-checkbox"><span class="lp-checkmark"></span>`;
-        wrapper.title = 'Select for LeadPilot';
+        const linkedinCheckbox = row.querySelector('input[type="checkbox"]');
+        if (!linkedinCheckbox) return;
 
-        // Prevent click from propagating to the row
-        wrapper.addEventListener('click', (e) => e.stopPropagation());
+        row.dataset.lpHooked = 'true';
 
-        const checkbox = wrapper.querySelector('.lp-row-checkbox');
-        checkbox.addEventListener('change', (e) => {
-            e.stopPropagation();
-            if (checkbox.checked) {
-                const data = extractFromRow(row);
-                addToQueue(data);
-                row.classList.add('lp-row-selected');
-            } else {
+        linkedinCheckbox.addEventListener('click', function(e) {
+            if (row.dataset.lpLetThrough === 'true') {
+                delete row.dataset.lpLetThrough;
+                return;
+            }
+
+            if (row.classList.contains('lp-row-selected')) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
                 const data = extractFromRow(row);
                 const idx = selectedLeads.findIndex(l => l.linkedinUrl === data.linkedinUrl);
                 if (idx >= 0) removeFromQueue(idx);
                 row.classList.remove('lp-row-selected');
+                return;
             }
-        });
 
-        // Dynamic positioning based on row type
-        const isTableRow = row.tagName === 'TR';
-        if (isTableRow) {
-            // For table rows: create a proper td cell
-            const td = document.createElement('td');
-            td.className = 'lp-checkbox-cell';
-            td.style.cssText = 'width:32px;min-width:32px;padding:0 2px;text-align:center;vertical-align:middle;';
-            td.appendChild(wrapper);
-            row.insertBefore(td, row.firstChild);
-        } else {
-            // For list/div rows: absolute position on the left
-            row.style.position = 'relative';
-            wrapper.classList.add('lp-checkbox-absolute');
-            row.insertBefore(wrapper, row.firstChild);
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            showCheckboxActionPopup(linkedinCheckbox, row);
+        }, true);
+    });
+
+    if (!skipSelectAll) {
+        injectSelectAll();
+    }
+    updateSelectAllState();
+}
+
+// =============================================
+// CHECKBOX ACTION POPUP
+// =============================================
+function showCheckboxActionPopup(checkbox, row) {
+    dismissCheckboxPopup();
+
+    const popup = document.createElement('div');
+    popup.id = 'lp-checkbox-popup';
+    popup.innerHTML = `
+        <div class="lp-popup-header">Choose action</div>
+        <button class="lp-popup-btn lp-popup-btn-leadpilot" id="lp-popup-leadpilot">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            Add to LeadPilot
+        </button>
+        <button class="lp-popup-btn lp-popup-btn-salesnav" id="lp-popup-salesnav">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            Select in Sales Nav
+        </button>
+    `;
+
+    const rect = checkbox.getBoundingClientRect();
+    popup.style.position = 'fixed';
+    popup.style.left = (rect.right + 8) + 'px';
+    popup.style.top = Math.max(4, rect.top - 8) + 'px';
+    popup.style.zIndex = '999999';
+
+    document.body.appendChild(popup);
+    requestAnimationFrame(() => popup.classList.add('lp-popup-visible'));
+
+    popup.querySelector('#lp-popup-leadpilot').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const data = extractFromRow(row);
+        addToQueue(data);
+        row.classList.add('lp-row-selected');
+        dismissCheckboxPopup();
+
+        if (!data.linkedinProfileUrl && data.linkedinUrl) {
+            fetchLinkedInProfileUrl(data.linkedinUrl).then(profileUrl => {
+                if (profileUrl) {
+                    const lead = selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl);
+                    if (lead) lead.linkedinProfileUrl = profileUrl;
+                }
+            });
         }
     });
 
-    // Inject Select All bar and update counts
-    injectSelectAll();
-    updateSelectAllState();
+    popup.querySelector('#lp-popup-salesnav').addEventListener('click', (e) => {
+        e.stopPropagation();
+        dismissCheckboxPopup();
+        row.dataset.lpLetThrough = 'true';
+        checkbox.click();
+    });
+
+    setTimeout(() => {
+        function outsideClickHandler(e) {
+            const existingPopup = document.getElementById('lp-checkbox-popup');
+            if (existingPopup && !existingPopup.contains(e.target)) {
+                dismissCheckboxPopup();
+                document.removeEventListener('click', outsideClickHandler, true);
+            }
+        }
+        document.addEventListener('click', outsideClickHandler, true);
+    }, 50);
+}
+
+function dismissCheckboxPopup() {
+    const existing = document.getElementById('lp-checkbox-popup');
+    if (existing) existing.remove();
 }
 
 // =============================================
@@ -636,32 +848,38 @@ function injectPanel() {
     const panel = document.createElement('div');
     panel.id = 'lp-panel';
     panel.innerHTML = `
+    <div id="lp-panel-pill">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"/>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+      <span id="lp-pill-text">LeadPilot</span>
+      <span id="lp-pill-count"></span>
+    </div>
+
     <div class="lp-panel-header">
       <div class="lp-panel-logo">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
-          <line x1="12" y1="22" x2="12" y2="15.5"/>
-          <polyline points="22 8.5 12 15.5 2 8.5"/>
-          <polyline points="2 15.5 12 8.5 22 15.5"/>
-          <line x1="12" y1="2" x2="12" y2="8.5"/>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
         </svg>
         <span>LeadPilot</span>
       </div>
       <button id="lp-panel-toggle" class="lp-toggle-btn" title="Minimize">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
     </div>
 
     <div id="lp-panel-body" class="lp-collapsed">
       <div class="lp-section">
         <div class="lp-section-label">
-          <span>Selected Leads</span>
+          <span>Selected</span>
           <span id="lp-count" class="lp-badge">0</span>
           <span id="lp-total-count" class="lp-total-count"></span>
         </div>
         <div id="lp-cards-container" class="lp-cards-container">
           <div class="lp-empty-state">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
             <p>Select leads using checkboxes</p>
           </div>
         </div>
@@ -671,11 +889,11 @@ function injectPanel() {
 
       <div class="lp-actions">
         <button id="lp-save-all" class="lp-btn-save" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          Save All to Sheet
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          <span class="lp-save-label">Save All to Sheet</span>
         </button>
         <span class="lp-shortcut-hint">Ctrl+L</span>
-        <button id="lp-clear" class="lp-btn-clear">Clear Selection</button>
+        <button id="lp-clear" class="lp-btn-clear">Clear</button>
       </div>
 
       <div id="lp-status-bar" class="lp-status-bar"></div>
@@ -688,6 +906,12 @@ function injectPanel() {
     document.getElementById('lp-panel-toggle').addEventListener('click', () => {
         document.getElementById('lp-panel-body').classList.toggle('lp-collapsed');
         document.getElementById('lp-panel').classList.toggle('lp-minimized');
+    });
+
+    // Pill click — expand
+    document.getElementById('lp-panel-pill').addEventListener('click', () => {
+        document.getElementById('lp-panel-body').classList.remove('lp-collapsed');
+        document.getElementById('lp-panel').classList.remove('lp-minimized');
     });
 
     // Start minimized
@@ -718,6 +942,18 @@ function renderPanel() {
 
     countEl.textContent = selectedLeads.length;
     saveBtn.disabled = selectedLeads.length === 0;
+
+    // Sync pill count
+    const pillCount = document.getElementById('lp-pill-count');
+    if (pillCount) pillCount.textContent = selectedLeads.length > 0 ? selectedLeads.length : '';
+
+    // Update save button label with count
+    const saveLabel = saveBtn.querySelector('.lp-save-label');
+    if (saveLabel) {
+        saveLabel.textContent = selectedLeads.length > 0
+            ? `Save ${selectedLeads.length} Lead${selectedLeads.length !== 1 ? 's' : ''}`
+            : 'Save All to Sheet';
+    }
 
     // Update lead count: X / Y on page
     const totalOnPage = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)').length;
@@ -758,6 +994,17 @@ function renderPanel() {
 // =============================================
 async function saveAllLeads() {
     if (selectedLeads.length === 0) return;
+
+    // Wait for any in-flight profile URL fetches before opening the modal
+    if (pendingProfileFetches.size > 0) {
+        const saveBtn = document.getElementById('lp-save-all');
+        const saveLabel = saveBtn?.querySelector('.lp-save-label');
+        const origText = saveLabel?.textContent;
+        if (saveLabel) saveLabel.textContent = 'Fetching URLs…';
+        await Promise.allSettled(pendingProfileFetches.values());
+        if (saveLabel && origText) saveLabel.textContent = origText;
+    }
+
     const tabs = getSelectedTabs();
     showReviewModal([...selectedLeads], tabs, false);
 }
@@ -925,11 +1172,33 @@ async function showReviewModal(leads, tabs, isProfile = false) {
         });
     }
 
-    // Status color dot — update on change
+    // Status color dot + status pill — update on change
     overlay.querySelectorAll('.lp-status-select').forEach(sel => {
         sel.addEventListener('change', () => {
+            const color = getStatusColor(sel.value);
             const dot = sel.closest('.lp-status-select-wrap')?.querySelector('.lp-status-dot');
-            if (dot) dot.style.background = getStatusColor(sel.value);
+            if (dot) dot.style.background = color;
+            const pill = sel.closest('.lp-review-card')?.querySelector('.lp-review-status-pill');
+            if (pill) {
+                pill.textContent = sel.value;
+                pill.style.cssText = `background:${color}20;color:${color};border:1px solid ${color}40;`;
+            }
+        });
+    });
+
+    // LinkedIn URL edit toggle
+    overlay.querySelectorAll('[data-url-edit]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const input = btn.previousElementSibling;
+            if (input && input.hasAttribute('readonly')) {
+                input.removeAttribute('readonly');
+                input.focus();
+                btn.textContent = 'Lock';
+            } else if (input) {
+                input.setAttribute('readonly', '');
+                btn.textContent = 'Edit';
+            }
         });
     });
 
@@ -942,6 +1211,7 @@ async function showReviewModal(leads, tabs, isProfile = false) {
                 firstName: card.querySelector('[data-field="firstName"]').value,
                 lastName: card.querySelector('[data-field="lastName"]').value,
                 linkedinUrl: card.querySelector('[data-field="linkedinUrl"]').value,
+                linkedinProfileUrl: card.querySelector('[data-field="linkedinProfileUrl"]')?.value || '',
                 companyName: card.querySelector('[data-field="companyName"]').value,
                 jobTitle: card.querySelector('[data-field="jobTitle"]').value,
                 country: card.querySelector('[data-field="country"]').value,
@@ -983,6 +1253,7 @@ function renderReviewCard(lead, index) {
                 <span class="lp-review-card-name">${lead.firstName} ${lead.lastName}</span>
                 <span class="lp-review-card-sub">${lead.jobTitle || 'No title'} · ${lead.companyName || 'No company'}</span>
             </div>
+            <span class="lp-review-status-pill" style="background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40;">${lead.status || 'Pending'}</span>
             ${dupBadge}
             <button class="lp-review-remove" title="Remove" aria-label="Remove lead">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1000,9 +1271,15 @@ function renderReviewCard(lead, index) {
                     <input type="text" data-field="lastName" value="${escapeAttr(lead.lastName)}" placeholder="Enter last name" />
                 </div>
             </div>
-            <div class="lp-review-field">
-                <label>LinkedIn URL</label>
-                <input type="text" data-field="linkedinUrl" value="${escapeAttr(lead.linkedinUrl)}" placeholder="LinkedIn profile URL" />
+            <div class="lp-review-field lp-field-url">
+                <label>Sales Navigator URL</label>
+                <input type="text" data-field="linkedinUrl" value="${escapeAttr(lead.linkedinUrl)}" placeholder="Sales Navigator URL" readonly />
+                <button class="lp-url-edit-link" data-url-edit>Edit</button>
+            </div>
+            <div class="lp-review-field lp-field-url">
+                <label>LinkedIn Profile URL</label>
+                <input type="text" data-field="linkedinProfileUrl" value="${escapeAttr(lead.linkedinProfileUrl || '')}" placeholder="Not detected on this page" readonly />
+                <button class="lp-url-edit-link" data-url-edit>Edit</button>
             </div>
             <div class="lp-review-row">
                 <div class="lp-review-field">
@@ -1197,19 +1474,25 @@ function injectProfilePanel() {
     const panel = document.createElement('div');
     panel.id = 'lp-panel';
     panel.innerHTML = `
+    <div id="lp-panel-pill">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"/>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+      <span id="lp-pill-text">LeadPilot</span>
+      <span id="lp-pill-count"></span>
+    </div>
+
     <div class="lp-panel-header">
       <div class="lp-panel-logo">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/>
-          <line x1="12" y1="22" x2="12" y2="15.5"/>
-          <polyline points="22 8.5 12 15.5 2 8.5"/>
-          <polyline points="2 15.5 12 8.5 22 15.5"/>
-          <line x1="12" y1="2" x2="12" y2="8.5"/>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
         </svg>
         <span>LeadPilot</span>
       </div>
       <button id="lp-panel-toggle" class="lp-toggle-btn">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
     </div>
     <div id="lp-panel-body">
@@ -1219,11 +1502,17 @@ function injectProfilePanel() {
 
       <div class="lp-actions">
         <button id="lp-save-profile" class="lp-btn-save">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           Save Lead
         </button>
-        <button id="lp-connect-profile" class="lp-btn-action">👋 Copy Connect Template</button>
-        <button id="lp-message-profile" class="lp-btn-action">💬 Copy Message Template</button>
+        <button id="lp-connect-profile" class="lp-btn-action">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+          Connect Template
+        </button>
+        <button id="lp-message-profile" class="lp-btn-action">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Message Template
+        </button>
       </div>
       <div id="lp-status-bar" class="lp-status-bar"></div>
     </div>
@@ -1234,6 +1523,12 @@ function injectProfilePanel() {
     document.getElementById('lp-panel-toggle').addEventListener('click', () => {
         document.getElementById('lp-panel-body').classList.toggle('lp-collapsed');
         document.getElementById('lp-panel').classList.toggle('lp-minimized');
+    });
+
+    // Pill click — expand
+    document.getElementById('lp-panel-pill').addEventListener('click', () => {
+        document.getElementById('lp-panel-body').classList.remove('lp-collapsed');
+        document.getElementById('lp-panel').classList.remove('lp-minimized');
     });
 
     // Save profile — open review modal
@@ -1307,13 +1602,16 @@ function main() {
         if (oldPanel) oldPanel.remove();
         const oldSelectAll = document.getElementById('lp-select-all-bar');
         if (oldSelectAll) oldSelectAll.remove();
-        document.querySelectorAll('.lp-checkbox-wrap').forEach(el => el.remove());
+        // Clean up hook markers and popup
+        dismissCheckboxPopup();
+        document.querySelectorAll('[data-lp-hooked]').forEach(el => delete el.dataset.lpHooked);
+        document.querySelectorAll('.lp-row-selected').forEach(el => el.classList.remove('lp-row-selected'));
         selectedLeads = [];
     }
 
     try {
         if (pageType === 'list') {
-            injectListCheckboxes();
+            hookLinkedInCheckboxes();
             injectPanel();
         } else if (pageType === 'profile' || pageType === 'linkedin-profile') {
             injectProfilePanel();
@@ -1322,5 +1620,8 @@ function main() {
         console.error('[LeadPilot] Main loop error:', err);
     }
 }
+
+// Start the profile URL observer once on page load
+initProfileUrlObserver();
 
 setInterval(main, 1500);

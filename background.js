@@ -12,6 +12,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         handleDeleteLead(request.linkedinUrls, request.selectedTabs, sendResponse);
         return true;
     }
+    if (request.action === 'fetchTabs') {
+        handleFetchTabs(request.url, sendResponse);
+        return true;
+    }
 });
 
 async function handleSaveLead(data, selectedTabs, sendResponse) {
@@ -31,6 +35,7 @@ async function handleSaveLead(data, selectedTabs, sendResponse) {
             firstName: data.firstName || '',
             lastName: data.lastName || '',
             linkedinUrl: data.linkedinUrl || '',
+            linkedinProfileUrl: data.linkedinProfileUrl || '',
             companyName: data.companyName || '',
             jobTitle: data.jobTitle || '',
             country: data.country || '',
@@ -122,6 +127,38 @@ async function handleDeleteLead(linkedinUrls, selectedTabs, sendResponse) {
         }
     } catch (err) {
         console.error('[LeadPilot] Delete error:', err);
+        sendResponse({ success: false, error: err.message });
+    }
+}
+
+async function handleFetchTabs(url, sendResponse) {
+    try {
+        // Use POST with getTabs action (same as save/delete) to avoid GET redirect issues
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'getTabs' }),
+            redirect: 'follow'
+        });
+
+        const responseText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch (parseErr) {
+            // If we still can't parse, show what we got
+            console.error('[LeadPilot] Fetch tabs parse error:', responseText.substring(0, 300));
+            sendResponse({ success: false, error: 'Could not parse response. Redeploy your Apps Script with the updated code.' });
+            return;
+        }
+
+        if (data.status === 'success' || data.sheets) {
+            sendResponse({ success: true, data: data });
+        } else {
+            sendResponse({ success: false, error: data.message || 'Unknown error' });
+        }
+    } catch (err) {
+        console.error('[LeadPilot] Fetch tabs error:', err);
         sendResponse({ success: false, error: err.message });
     }
 }

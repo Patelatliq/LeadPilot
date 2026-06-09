@@ -6,14 +6,68 @@ document.addEventListener('DOMContentLoaded', () => {
   const messageTemplateInput = document.getElementById('messageTemplate');
   const saveMessageTemplateBtn = document.getElementById('saveMessageTemplate');
   const statusDiv = document.getElementById('lp-status');
-  const helpToggle = document.getElementById('helpToggle');
-  const helpSection = document.getElementById('helpSection');
   const tabsList = document.getElementById('tabsList');
   const newTabInput = document.getElementById('newTabName');
   const addTabBtn = document.getElementById('addTab');
   const refreshTabsBtn = document.getElementById('refreshTabs');
 
-  let sheetTabs = []; // Array of tab names
+  // Connection state elements
+  const connectionDot = document.getElementById('lp-connection-dot');
+  const urlEditState = document.getElementById('lp-url-edit-state');
+  const urlConnectedState = document.getElementById('lp-url-connected-state');
+  const urlTruncated = document.getElementById('lp-url-truncated');
+  const urlEditTrigger = document.getElementById('lp-url-edit-trigger');
+
+  // Collapsible section elements
+  const templatesToggle = document.getElementById('templates-toggle');
+  const templatesBody = document.getElementById('templates-body');
+  const helpToggle = document.getElementById('help-toggle');
+  const helpBody = document.getElementById('helpSection');
+
+  let sheetTabs = [];
+
+  // ---------------------------
+  // Connection state display
+  // ---------------------------
+  function setConnectionState(url) {
+    if (url) {
+      const display = url.length > 42 ? url.slice(0, 22) + '...' + url.slice(-14) : url;
+      urlTruncated.textContent = display;
+      urlEditState.style.display = 'none';
+      urlConnectedState.style.display = 'block';
+      connectionDot.classList.add('connected');
+      connectionDot.title = 'Connected';
+    } else {
+      urlEditState.style.display = 'block';
+      urlConnectedState.style.display = 'none';
+      connectionDot.classList.remove('connected');
+      connectionDot.title = 'Not connected';
+    }
+  }
+
+  urlEditTrigger.addEventListener('click', () => {
+    chrome.storage.sync.get(['webAppUrl'], r => {
+      webAppUrlInput.value = r.webAppUrl || '';
+      urlEditState.style.display = 'block';
+      urlConnectedState.style.display = 'none';
+      webAppUrlInput.focus();
+      webAppUrlInput.select();
+    });
+  });
+
+  // ---------------------------
+  // Collapsible sections
+  // ---------------------------
+  function initCollapsible(toggleEl, bodyEl) {
+    toggleEl.addEventListener('click', () => {
+      const isOpen = bodyEl.classList.contains('open');
+      bodyEl.classList.toggle('open', !isOpen);
+      toggleEl.classList.toggle('open', !isOpen);
+    });
+  }
+
+  initCollapsible(templatesToggle, templatesBody);
+  initCollapsible(helpToggle, helpBody);
 
   // ---------------------------
   // Load saved settings
@@ -24,12 +78,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (result.messageTemplate) messageTemplateInput.value = result.messageTemplate;
     sheetTabs = result.sheetTabs || [];
     renderTabs();
-    // Auto-fetch tabs from server on popup open
+    setConnectionState(result.webAppUrl || null);
     if (result.webAppUrl) fetchTabNames(result.webAppUrl);
   });
 
   // ---------------------------
-  // Save Google Script URL + auto-fetch tabs
+  // Save Google Script URL
   // ---------------------------
   saveWebAppUrlBtn.addEventListener('click', async () => {
     const url = webAppUrlInput.value.trim();
@@ -38,9 +92,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     chrome.storage.sync.set({ webAppUrl: url }, () => {
-      showStatus('✓ Script URL saved!', 'success');
+      showStatus('Script URL saved', 'success');
+      setConnectionState(url);
     });
-    // Auto-fetch tab names
     await fetchTabNames(url);
   });
 
@@ -56,26 +110,32 @@ document.addEventListener('DOMContentLoaded', () => {
       showStatus('Set your Script URL first', 'error');
       return;
     }
-    showStatus('Fetching sheet tabs...', 'info');
+    showStatus('Fetching tabs...', 'info');
     try {
-      const response = await fetch(url);
-      const data = await response.json();
+      const result = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'fetchTabs', url }, (response) => {
+          resolve(response);
+        });
+      });
+
+      if (!result || !result.success) {
+        showStatus(result?.error || 'Could not fetch tabs — check URL', 'error');
+        return;
+      }
+
+      const data = result.data;
       if (data.sheets && data.sheets.length > 0) {
-        // Replace local tabs entirely with server response
-        // This ensures deleted tabs are removed
         sheetTabs = [...new Set(data.sheets)];
         chrome.storage.sync.set({ sheetTabs });
         renderTabs();
-        showStatus(`✓ Found ${data.sheets.length} tab(s)`, 'success');
+        showStatus(`${data.sheets.length} tab${data.sheets.length > 1 ? 's' : ''} found`, 'success');
       } else {
-        // No tabs on server — clear local list
         sheetTabs = [];
         chrome.storage.sync.set({ sheetTabs });
         renderTabs();
-        showStatus('✓ Connected — no tabs found yet', 'success');
+        showStatus('Connected — no tabs yet', 'success');
       }
     } catch (err) {
-      console.error('[LeadPilot] Fetch tabs error:', err);
       showStatus('Could not fetch tabs — check URL', 'error');
     }
   }
@@ -99,11 +159,15 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.sync.set({ sheetTabs });
     renderTabs();
     newTabInput.value = '';
-    showStatus(`✓ "${name}" added`, 'success');
+    showStatus(`"${name}" added`, 'success');
+  });
+
+  newTabInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addTabBtn.click();
   });
 
   // ---------------------------
-  // Render tab chips
+  // Render tab list rows with checkboxes
   // ---------------------------
   function renderTabs() {
     if (!tabsList) return;
@@ -111,19 +175,24 @@ document.addEventListener('DOMContentLoaded', () => {
       tabsList.innerHTML = '<div class="lp-tabs-empty">No tabs yet — connect your sheet or add manually</div>';
       return;
     }
-    tabsList.innerHTML = sheetTabs.map((name, i) =>
-      `<span class="lp-tab-chip">
-        <span>${name}</span>
-        <button class="lp-tab-remove" data-index="${i}" title="Remove">×</button>
-      </span>`
-    ).join('');
 
-    tabsList.querySelectorAll('.lp-tab-remove').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const idx = parseInt(btn.dataset.index);
-        sheetTabs.splice(idx, 1);
-        chrome.storage.sync.set({ sheetTabs });
-        renderTabs();
+    chrome.storage.sync.get(['selectedTabs'], (r) => {
+      const sel = r.selectedTabs || [];
+      tabsList.innerHTML = sheetTabs.map((name) => {
+        const checked = sel.includes(name) ? 'checked' : '';
+        const safeId = 'lp-ptab-' + name.replace(/[^a-zA-Z0-9]/g, '_');
+        return `<label class="lp-tab-row" for="${safeId}">
+          <input type="checkbox" id="${safeId}" value="${name}" ${checked}>
+          <span class="lp-tab-row-name">${name}</span>
+        </label>`;
+      }).join('');
+
+      // Save selection on checkbox change
+      tabsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const selected = Array.from(tabsList.querySelectorAll('input:checked')).map(c => c.value);
+          chrome.storage.sync.set({ selectedTabs: selected });
+        });
       });
     });
   }
@@ -133,22 +202,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // ---------------------------
   saveConnectTemplateBtn.addEventListener('click', () => {
     chrome.storage.sync.set({ connectTemplate: connectTemplateInput.value }, () => {
-      showStatus('✓ Connect template saved!', 'success');
+      showStatus('Connect template saved', 'success');
     });
   });
 
   saveMessageTemplateBtn.addEventListener('click', () => {
     chrome.storage.sync.set({ messageTemplate: messageTemplateInput.value }, () => {
-      showStatus('✓ Message template saved!', 'success');
+      showStatus('Message template saved', 'success');
     });
-  });
-
-  // ---------------------------
-  // Help toggle
-  // ---------------------------
-  helpToggle.addEventListener('click', (e) => {
-    e.preventDefault();
-    helpSection.style.display = helpSection.style.display === 'none' ? 'block' : 'none';
   });
 
   // ---------------------------
@@ -161,6 +222,6 @@ document.addEventListener('DOMContentLoaded', () => {
     statusDiv._timer = setTimeout(() => {
       statusDiv.className = 'lp-status';
       statusDiv.textContent = '';
-    }, 4000);
+    }, 3500);
   }
 });

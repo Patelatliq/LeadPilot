@@ -4,28 +4,29 @@
 <head>
   <title>LeadPilot</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="popup.css">
 </head>
 
 <body>
   <div class="lp-container">
+
     <!-- Header -->
     <div class="lp-header">
       <div class="lp-logo">
         <div class="lp-logo-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-            <line x1="12" y1="22" x2="12" y2="15.5" />
-            <polyline points="22 8.5 12 15.5 2 8.5" />
-            <polyline points="2 15.5 12 8.5 22 15.5" />
-            <line x1="12" y1="2" x2="12" y2="8.5" />
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
         </div>
         <span>LeadPilot</span>
       </div>
-      <span class="lp-badge">v2.0</span>
+      <div class="lp-header-right">
+        <span id="lp-connection-dot" title="Not connected"></span>
+        <span class="lp-badge">v3.0</span>
+      </div>
     </div>
 
     <!-- Status Toast -->
@@ -34,47 +35,57 @@
     <!-- Google Script URL Section -->
     <div class="lp-section">
       <div class="lp-section-title">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
         </svg>
-        <span>Connect Google Sheet</span>
+        <span>Google Sheet</span>
       </div>
-      <div class="lp-input-row">
-        <input type="text" id="webAppUrl" class="lp-input" placeholder="Paste your Google Apps Script URL">
-        <button id="saveWebAppUrl" class="lp-btn lp-btn-primary">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        </button>
+
+      <!-- State A: Not connected (shows input) -->
+      <div id="lp-url-edit-state">
+        <div class="lp-input-row">
+          <input type="text" id="webAppUrl" class="lp-input" placeholder="Paste your Apps Script URL...">
+          <button id="saveWebAppUrl" class="lp-btn lp-btn-primary" title="Save URL">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </button>
+        </div>
       </div>
-      <button id="helpToggle" class="lp-text-link">How to get the Script URL? →</button>
+
+      <!-- State B: Connected (shows truncated URL) -->
+      <div id="lp-url-connected-state" style="display:none;">
+        <div class="lp-url-display">
+          <span class="lp-url-text" id="lp-url-truncated"></span>
+          <button class="lp-url-edit-btn" id="lp-url-edit-trigger">Edit</button>
+        </div>
+      </div>
     </div>
 
     <!-- Sheet Tabs Section -->
     <div class="lp-section">
       <div class="lp-section-title">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <path d="M3 9h18" />
           <path d="M9 21V9" />
         </svg>
         <span>Sheet Tabs</span>
         <button id="refreshTabs" class="lp-icon-btn" title="Refresh tabs from spreadsheet">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <polyline points="23 4 23 10 17 10" />
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
           </svg>
         </button>
       </div>
-      <p class="lp-hint">These are the tabs in your Google Sheet. Select which tabs to save leads to.</p>
       <div id="tabsList" class="lp-tabs-list">
         <div class="lp-tabs-empty">Connect your Google Sheet to see tabs</div>
       </div>
       <div class="lp-input-row" style="margin-top: 8px;">
-        <input type="text" id="newTabName" class="lp-input" placeholder="Add a new tab name...">
-        <button id="addTab" class="lp-btn lp-btn-primary">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <input type="text" id="newTabName" class="lp-input" placeholder="Add a tab name...">
+        <button id="addTab" class="lp-btn lp-btn-primary" title="Add tab">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
@@ -82,53 +93,64 @@
       </div>
     </div>
 
-    <!-- Message Templates -->
+    <!-- Message Templates (collapsed by default) -->
     <div class="lp-section">
-      <div class="lp-section-title">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <div class="lp-collapsible-header" id="templates-toggle">
+        <div class="lp-section-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          <span>Message Templates</span>
+        </div>
+        <svg class="lp-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6 9 12 15 18 9" />
         </svg>
-        <span>Message Templates</span>
       </div>
+      <div class="lp-collapsible-body" id="templates-body">
+        <label class="lp-label">Connection Request</label>
+        <textarea id="connectTemplate" class="lp-textarea" placeholder="Hi [Name], I'd love to connect!" rows="2"></textarea>
+        <button id="saveConnectTemplate" class="lp-btn lp-btn-ghost">Save Template</button>
 
-      <label class="lp-label">Connection Request</label>
-      <textarea id="connectTemplate" class="lp-textarea" placeholder="Hi [Name], I'd love to connect with you!"
-        rows="2"></textarea>
-      <button id="saveConnectTemplate" class="lp-btn lp-btn-ghost">Save Template</button>
+        <label class="lp-label" style="margin-top:10px;">Follow-up Message</label>
+        <textarea id="messageTemplate" class="lp-textarea" placeholder="Hi [Name], thanks for connecting!..." rows="2"></textarea>
+        <button id="saveMessageTemplate" class="lp-btn lp-btn-ghost">Save Template</button>
 
-      <label class="lp-label" style="margin-top: 10px;">Follow-up Message</label>
-      <textarea id="messageTemplate" class="lp-textarea" placeholder="Hi [Name], thanks for connecting! I wanted to..."
-        rows="2"></textarea>
-      <button id="saveMessageTemplate" class="lp-btn lp-btn-ghost">Save Template</button>
+        <p class="lp-hint" style="margin-top:8px;margin-bottom:0;">
+          Use <strong style="color:#818cf8;">[Name]</strong> — auto-fills with the lead's first name
+        </p>
+      </div>
     </div>
 
-    <!-- Help Section (hidden) -->
-    <div id="helpSection" class="lp-section lp-help-section" style="display:none;">
-      <div class="lp-section-title">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10" />
-          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-          <line x1="12" y1="17" x2="12.01" y2="17" />
+    <!-- Setup Guide (collapsed by default) -->
+    <div class="lp-section lp-help-section">
+      <div class="lp-collapsible-header" id="help-toggle">
+        <div class="lp-section-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span>Setup Guide</span>
+        </div>
+        <svg class="lp-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6 9 12 15 18 9" />
         </svg>
-        <span>Setup Guide</span>
       </div>
-      <ol class="lp-steps">
-        <li>Open your Google Sheet</li>
-        <li>Go to <strong>Extensions → Apps Script</strong></li>
-        <li>Delete existing code, paste from <strong>PASTE_IN_GOOGLE_SHEET.js</strong></li>
-        <li>Click <strong>Deploy → New deployment</strong></li>
-        <li>Type: <strong>Web app</strong></li>
-        <li>Execute as: <strong>Me</strong></li>
-        <li>Who has access: <strong>Anyone</strong></li>
-        <li>Click <strong>Deploy</strong>, authorize, copy the URL</li>
-        <li>Paste the URL above and click Save!</li>
-      </ol>
+      <div class="lp-collapsible-body" id="helpSection">
+        <ol class="lp-steps">
+          <li>Open your Google Sheet</li>
+          <li>Go to <strong>Extensions → Apps Script</strong></li>
+          <li>Delete existing code, paste from <strong>PASTE_IN_GOOGLE_SHEET.js</strong></li>
+          <li>Click <strong>Deploy → New deployment</strong></li>
+          <li>Type: <strong>Web app</strong></li>
+          <li>Execute as: <strong>Me</strong></li>
+          <li>Who has access: <strong>Anyone</strong></li>
+          <li>Click <strong>Deploy</strong>, authorize, copy the URL</li>
+          <li>Paste the URL above and save</li>
+        </ol>
+      </div>
     </div>
 
-    <!-- Footer -->
-    <div class="lp-footer">
-      <span>💡 Use <strong>[Name]</strong> in templates — auto-fills with lead's first name</span>
-    </div>
   </div>
   <script src="popup.js"></script>
 </body>
