@@ -580,85 +580,169 @@
 }
 
 /* =============================================
-   CHECKBOX ACTION POPUP
+   MODE TOGGLE BAR
    ============================================= */
 
-/* --- The popup container --- */
-#lp-checkbox-popup {
-    background: rgba(15, 15, 30, 0.92);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(79,70,229,0.35);
-    border-radius: 10px;
-    padding: 6px;
-    min-width: 180px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05) inset;
-    opacity: 0;
-    transform: translateY(4px) scale(0.96);
-    transition: opacity 0.15s ease, transform 0.15s ease;
+#lp-mode-bar {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 999990;
+    pointer-events: auto;
+}
+
+.lp-mode-bar-inner {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    background: rgba(15, 15, 30, 0.88);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04) inset;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
 }
 
-#lp-checkbox-popup.lp-popup-visible {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-}
-
-/* --- Header text --- */
-.lp-popup-header {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: rgba(255,255,255,0.45);
-    padding: 4px 8px 6px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    margin-bottom: 4px;
-}
-
-/* --- Popup buttons --- */
-.lp-popup-btn {
+/* --- Mode buttons --- */
+.lp-mode-btn {
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 10px;
-    border: none;
-    border-radius: 7px;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid transparent;
+    border-radius: 10px;
     cursor: pointer;
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 500;
     font-family: inherit;
-    transition: background 0.12s, transform 0.1s;
-    text-align: left;
+    background: transparent;
+    color: rgba(255,255,255,0.4);
+    transition: all 0.2s ease;
+    white-space: nowrap;
 }
 
-.lp-popup-btn svg {
+.lp-mode-btn svg {
     flex-shrink: 0;
+    opacity: 0.6;
+    transition: opacity 0.2s;
 }
 
-/* LeadPilot button */
-.lp-popup-btn-leadpilot {
-    background: rgba(79,70,229,0.15);
-    color: #a5b4fc;
+.lp-mode-btn:hover {
+    color: rgba(255,255,255,0.7);
+    background: rgba(255,255,255,0.06);
 }
 
-.lp-popup-btn-leadpilot:hover {
-    background: rgba(79,70,229,0.3);
-    color: #c7d2fe;
-    transform: translateX(2px);
+.lp-mode-btn:hover svg {
+    opacity: 0.9;
 }
 
-/* Sales Nav button */
-.lp-popup-btn-salesnav {
-    background: rgba(56,142,224,0.1);
+/* Active states */
+.lp-mode-btn-lp.lp-mode-active {
+    background: rgba(124, 58, 237, 0.2);
+    border-color: rgba(124, 58, 237, 0.4);
+    color: #c4b5fd;
+    box-shadow: 0 0 16px rgba(124, 58, 237, 0.15);
+}
+
+.lp-mode-btn-lp.lp-mode-active svg {
+    opacity: 1;
+    stroke: #a78bfa;
+}
+
+.lp-mode-btn-sn.lp-mode-active {
+    background: rgba(37, 99, 235, 0.2);
+    border-color: rgba(37, 99, 235, 0.4);
     color: #93c5fd;
-    margin-top: 3px;
+    box-shadow: 0 0 16px rgba(37, 99, 235, 0.15);
 }
 
-.lp-popup-btn-salesnav:hover {
-    background: rgba(56,142,224,0.22);
-    color: #bfdbfe;
-    transform: translateX(2px);
+.lp-mode-btn-sn.lp-mode-active svg {
+    opacity: 1;
+    stroke: #60a5fa;
+}
+
+/* --- Pulsing dot --- */
+.lp-mode-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+    transition: background 0.2s;
+}
+
+.lp-mode-active .lp-mode-dot {
+    animation: lp-dot-pulse 2s ease-in-out infinite;
+}
+
+.lp-mode-btn-lp.lp-mode-active .lp-mode-dot {
+    background: #a78bfa;
+}
+
+.lp-mode-btn-sn.lp-mode-active .lp-mode-dot {
+    background: #60a5fa;
+}
+
+@keyframes lp-dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* --- Selection count pill --- */
+.lp-mode-count {
+    font-size: 10px;
+    font-weight: 700;
+    opacity: 0.7;
+    margin-left: 2px;
+}
+
+/* =============================================
+   VISUAL INDICATORS — ROW HIGHLIGHTS
+   ============================================= */
+
+/* LeadPilot selected row — purple theme */
+.lp-row-selected {
+    background: linear-gradient(90deg, rgba(124,58,237,0.08) 0%, rgba(124,58,237,0.03) 30%, transparent 60%) !important;
+    box-shadow: inset 4px 0 0 #7c3aed !important;
+    transition: background 0.2s, box-shadow 0.2s;
+}
+
+/* =============================================
+   VISUAL INDICATORS — CHECKBOX GLOW + BADGE
+   ============================================= */
+
+/* Glow ring around checkbox */
+.lp-glow-parent {
+    position: relative;
+}
+
+.lp-glow-purple {
+    border-radius: 4px;
+    box-shadow: 0 0 0 3px rgba(124,58,237,0.3), 0 0 12px rgba(124,58,237,0.15);
+    transition: box-shadow 0.2s;
+}
+
+/* Micro LP badge */
+.lp-micro-badge {
+    position: absolute;
+    bottom: -2px;
+    right: -4px;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    padding: 1px 3px;
+    border-radius: 3px;
+    line-height: 1;
+    pointer-events: none;
+    z-index: 10;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+.lp-badge-purple {
+    background: #7c3aed;
+    color: #fff;
+    box-shadow: 0 1px 4px rgba(124,58,237,0.4);
 }
 
 /* =============================================
@@ -696,12 +780,6 @@
     border: solid white;
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
-}
-
-/* Selected row highlight */
-.lp-row-selected {
-    background: rgba(79,70,229,0.05) !important;
-    box-shadow: inset 3px 0 0 #4f46e5;
 }
 
 /* =============================================

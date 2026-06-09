@@ -83,6 +83,12 @@ const pendingProfileFetches = new Map(); // linkedinUrl -> Promise
 const linkedInProfileUrlCache = new Map(); // salesNavUrl -> linkedinProfileUrl
 let lastObservedProfileUrl = '';
 
+// Mode: 'leadpilot' or 'salesnav' — persisted via chrome.storage
+let lpMode = 'leadpilot';
+chrome.storage.sync.get(['lpMode'], (result) => {
+    if (result.lpMode) lpMode = result.lpMode;
+});
+
 function addToQueue(data) {
     if (selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl)) return false;
     selectedLeads.push(data);
@@ -101,7 +107,13 @@ function removeFromQueue(index) {
             const rowUrl = linkEl.href.split('?')[0];
             if (rowUrl === removed.linkedinUrl) {
                 const row = linkEl.closest('tr, li, div[data-view-name]');
-                if (row) row.classList.remove('lp-row-selected');
+                if (row) {
+                    row.classList.remove('lp-row-selected');
+                    removeCheckboxGlow(row);
+                    // Uncheck the native checkbox
+                    const cb = row.querySelector('input[type="checkbox"]');
+                    if (cb) cb.checked = false;
+                }
             }
         });
     }
@@ -112,15 +124,101 @@ function removeFromQueue(index) {
 
 function clearQueue() {
     selectedLeads = [];
-    document.querySelectorAll('.lp-row-selected').forEach(el => el.classList.remove('lp-row-selected'));
+    document.querySelectorAll('.lp-row-selected').forEach(el => {
+        el.classList.remove('lp-row-selected');
+        removeCheckboxGlow(el);
+        // Uncheck the native checkbox
+        const cb = el.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = false;
+    });
     renderPanel();
     updateSelectAllState();
+}
+
+// =============================================
+// MODE TOGGLE BAR
+// =============================================
+function injectModeToggle() {
+    if (document.getElementById('lp-mode-bar')) {
+        updateModeBarUI();
+        return;
+    }
+    const bar = document.createElement('div');
+    bar.id = 'lp-mode-bar';
+    bar.innerHTML = `
+        <div class="lp-mode-bar-inner">
+            <button id="lp-mode-btn-lp" class="lp-mode-btn lp-mode-btn-lp">
+                <span class="lp-mode-dot"></span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                LeadPilot Mode
+                <span class="lp-mode-count" id="lp-mode-count-lp"></span>
+            </button>
+            <button id="lp-mode-btn-sn" class="lp-mode-btn lp-mode-btn-sn">
+                <span class="lp-mode-dot"></span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                Sales Nav Mode
+                <span class="lp-mode-count" id="lp-mode-count-sn"></span>
+            </button>
+        </div>
+    `;
+    // Append to body since it's position:fixed — no container dependency
+    document.body.appendChild(bar);
+
+    document.getElementById('lp-mode-btn-lp').addEventListener('click', () => setMode('leadpilot'));
+    document.getElementById('lp-mode-btn-sn').addEventListener('click', () => setMode('salesnav'));
+    updateModeBarUI();
+}
+
+function setMode(mode) {
+    if (lpMode === mode) return;
+    // Clear existing selections when switching mode
+    if (lpMode === 'leadpilot') {
+        clearQueue();
+        // Remove Select All bar (not needed in Sales Nav mode)
+        const selectAllBar = document.getElementById('lp-select-all-bar');
+        if (selectAllBar) selectAllBar.remove();
+    } else {
+        // Uncheck any LinkedIn-natively-selected checkboxes
+        document.querySelectorAll('[data-lp-hooked]').forEach(row => {
+            const cb = row.querySelector('input[type="checkbox"]');
+            if (cb && cb.checked) {
+                row.dataset.lpLetThrough = 'true';
+                cb.click();
+            }
+        });
+    }
+    lpMode = mode;
+    chrome.storage.sync.set({ lpMode: mode });
+    updateModeBarUI();
+    // Re-inject Select All if switching to LeadPilot
+    if (mode === 'leadpilot') {
+        injectSelectAll();
+    }
+}
+
+function updateModeBarUI() {
+    const lpBtn = document.getElementById('lp-mode-btn-lp');
+    const snBtn = document.getElementById('lp-mode-btn-sn');
+    if (!lpBtn || !snBtn) return;
+
+    lpBtn.classList.toggle('lp-mode-active', lpMode === 'leadpilot');
+    snBtn.classList.toggle('lp-mode-active', lpMode === 'salesnav');
+
+    // Update counts
+    const lpCount = document.getElementById('lp-mode-count-lp');
+    const snCount = document.getElementById('lp-mode-count-sn');
+    if (lpCount) lpCount.textContent = selectedLeads.length > 0 ? `(${selectedLeads.length})` : '';
+    if (snCount) {
+        const snSelected = document.querySelectorAll('[data-lp-hooked] input[type="checkbox"]:checked').length;
+        snCount.textContent = snSelected > 0 ? `(${snSelected})` : '';
+    }
 }
 
 // =============================================
 // SELECT ALL FOR LEADPILOT
 // =============================================
 function injectSelectAll() {
+    if (lpMode !== 'leadpilot') return;
     try {
         if (document.getElementById('lp-select-all-bar')) return;
         const container = document.querySelector(
@@ -139,21 +237,23 @@ function injectSelectAll() {
                 <span id="lp-page-count" class="lp-page-count"></span>
             </label>
         `;
-        container.parentElement.insertBefore(bar, container);
+        // Insert after the mode bar
+        const modeBar = document.getElementById('lp-mode-bar');
+        if (modeBar && modeBar.nextSibling) {
+            container.parentElement.insertBefore(bar, modeBar.nextSibling);
+        } else {
+            container.parentElement.insertBefore(bar, container);
+        }
 
         document.getElementById('lp-select-all-cb').addEventListener('change', async (e) => {
             const checked = e.target.checked;
             const textEl = bar.querySelector('.lp-select-all-text');
-
             if (checked) {
                 textEl.textContent = 'Loading all leads...';
                 await scrollToLoadAllRows();
-                // Hook any newly loaded rows
                 hookLinkedInCheckboxes(true);
-                // Extract all hooked rows into LeadPilot queue
                 selectAllRowsForLeadPilot();
             } else {
-                // Deselect all from LeadPilot
                 clearQueue();
             }
             textEl.textContent = 'Select All for LeadPilot';
@@ -172,6 +272,10 @@ function selectAllRowsForLeadPilot() {
         if (data.linkedinUrl) {
             addToQueue(data);
             row.classList.add('lp-row-selected');
+            applyCheckboxGlow(row, 'leadpilot');
+            // Tick the native checkbox
+            const cb = row.querySelector('input[type="checkbox"]');
+            if (cb) cb.checked = true;
         }
     });
 }
@@ -691,27 +795,53 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
         row.dataset.lpHooked = 'true';
 
         linkedinCheckbox.addEventListener('click', function(e) {
+            // Let-through flag for Sales Nav mode or programmatic clicks
             if (row.dataset.lpLetThrough === 'true') {
                 delete row.dataset.lpLetThrough;
                 return;
             }
 
+            // ---- SALES NAV MODE: let everything through natively ----
+            if (lpMode === 'salesnav') {
+                return; // don't intercept
+            }
+
+            // ---- LEADPILOT MODE ----
+            e.preventDefault();
+            e.stopImmediatePropagation();
+
             if (row.classList.contains('lp-row-selected')) {
-                e.preventDefault();
-                e.stopImmediatePropagation();
+                // Deselect from LeadPilot
                 const data = extractFromRow(row);
                 const idx = selectedLeads.findIndex(l => l.linkedinUrl === data.linkedinUrl);
                 if (idx >= 0) removeFromQueue(idx);
                 row.classList.remove('lp-row-selected');
-                return;
-            }
+                removeCheckboxGlow(row);
+                linkedinCheckbox.checked = false; // uncheck the tick
+            } else {
+                // Select for LeadPilot
+                const data = extractFromRow(row);
+                addToQueue(data);
+                row.classList.add('lp-row-selected');
+                linkedinCheckbox.checked = true; // show the tick
+                applyCheckboxGlow(row, 'leadpilot');
 
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            showCheckboxActionPopup(linkedinCheckbox, row);
+                if (!data.linkedinProfileUrl && data.linkedinUrl) {
+                    fetchLinkedInProfileUrl(data.linkedinUrl).then(profileUrl => {
+                        if (profileUrl) {
+                            const lead = selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl);
+                            if (lead) lead.linkedinProfileUrl = profileUrl;
+                        }
+                    });
+                }
+            }
+            updateModeBarUI();
+            updateSelectAllState();
         }, true);
     });
 
+    // Inject mode toggle and Select All
+    injectModeToggle();
     if (!skipSelectAll) {
         injectSelectAll();
     }
@@ -719,73 +849,39 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
 }
 
 // =============================================
-// CHECKBOX ACTION POPUP
+// VISUAL INDICATORS — CHECKBOX GLOW + BADGE
 // =============================================
-function showCheckboxActionPopup(checkbox, row) {
-    dismissCheckboxPopup();
+function applyCheckboxGlow(row, mode) {
+    const cb = row.querySelector('input[type="checkbox"]');
+    if (!cb) return;
+    // Find or create glow wrapper
+    const parent = cb.closest('label, td, div') || cb.parentElement;
+    if (!parent) return;
+    parent.classList.add('lp-glow-parent');
 
-    const popup = document.createElement('div');
-    popup.id = 'lp-checkbox-popup';
-    popup.innerHTML = `
-        <div class="lp-popup-header">Choose action</div>
-        <button class="lp-popup-btn lp-popup-btn-leadpilot" id="lp-popup-leadpilot">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            Add to LeadPilot
-        </button>
-        <button class="lp-popup-btn lp-popup-btn-salesnav" id="lp-popup-salesnav">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            Select in Sales Nav
-        </button>
-    `;
+    // Remove existing badge
+    const oldBadge = parent.querySelector('.lp-micro-badge');
+    if (oldBadge) oldBadge.remove();
 
-    const rect = checkbox.getBoundingClientRect();
-    popup.style.position = 'fixed';
-    popup.style.left = (rect.right + 8) + 'px';
-    popup.style.top = Math.max(4, rect.top - 8) + 'px';
-    popup.style.zIndex = '999999';
-
-    document.body.appendChild(popup);
-    requestAnimationFrame(() => popup.classList.add('lp-popup-visible'));
-
-    popup.querySelector('#lp-popup-leadpilot').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const data = extractFromRow(row);
-        addToQueue(data);
-        row.classList.add('lp-row-selected');
-        dismissCheckboxPopup();
-
-        if (!data.linkedinProfileUrl && data.linkedinUrl) {
-            fetchLinkedInProfileUrl(data.linkedinUrl).then(profileUrl => {
-                if (profileUrl) {
-                    const lead = selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl);
-                    if (lead) lead.linkedinProfileUrl = profileUrl;
-                }
-            });
-        }
-    });
-
-    popup.querySelector('#lp-popup-salesnav').addEventListener('click', (e) => {
-        e.stopPropagation();
-        dismissCheckboxPopup();
-        row.dataset.lpLetThrough = 'true';
-        checkbox.click();
-    });
-
-    setTimeout(() => {
-        function outsideClickHandler(e) {
-            const existingPopup = document.getElementById('lp-checkbox-popup');
-            if (existingPopup && !existingPopup.contains(e.target)) {
-                dismissCheckboxPopup();
-                document.removeEventListener('click', outsideClickHandler, true);
-            }
-        }
-        document.addEventListener('click', outsideClickHandler, true);
-    }, 50);
+    if (mode === 'leadpilot') {
+        parent.classList.add('lp-glow-purple');
+        parent.classList.remove('lp-glow-blue');
+        // Add LP micro-badge
+        const badge = document.createElement('span');
+        badge.className = 'lp-micro-badge lp-badge-purple';
+        badge.textContent = 'LP';
+        parent.appendChild(badge);
+    }
 }
 
-function dismissCheckboxPopup() {
-    const existing = document.getElementById('lp-checkbox-popup');
-    if (existing) existing.remove();
+function removeCheckboxGlow(row) {
+    const cb = row.querySelector('input[type="checkbox"]');
+    if (!cb) return;
+    const parent = cb.closest('.lp-glow-parent') || cb.parentElement;
+    if (!parent) return;
+    parent.classList.remove('lp-glow-parent', 'lp-glow-purple', 'lp-glow-blue');
+    const badge = parent.querySelector('.lp-micro-badge');
+    if (badge) badge.remove();
 }
 
 // =============================================
@@ -1602,9 +1698,13 @@ function main() {
         if (oldPanel) oldPanel.remove();
         const oldSelectAll = document.getElementById('lp-select-all-bar');
         if (oldSelectAll) oldSelectAll.remove();
-        // Clean up hook markers and popup
-        dismissCheckboxPopup();
-        document.querySelectorAll('[data-lp-hooked]').forEach(el => delete el.dataset.lpHooked);
+        const oldModeBar = document.getElementById('lp-mode-bar');
+        if (oldModeBar) oldModeBar.remove();
+        // Clean up hook markers and visual indicators
+        document.querySelectorAll('[data-lp-hooked]').forEach(el => {
+            removeCheckboxGlow(el);
+            delete el.dataset.lpHooked;
+        });
         document.querySelectorAll('.lp-row-selected').forEach(el => el.classList.remove('lp-row-selected'));
         selectedLeads = [];
     }
