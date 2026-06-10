@@ -7,7 +7,17 @@
     const map = new Map();
     const subs = new Set();
 
-    function notify() { subs.forEach(fn => { try { fn(); } catch (e) {} }); }
+    let suppress = 0;
+    let pending = false;
+    function dispatch() { subs.forEach(fn => { try { fn(); } catch (e) {} }); }
+    function notify() { if (suppress > 0) { pending = true; return; } dispatch(); }
+    function batch(fn) {
+      suppress++;
+      try { fn(); } finally {
+        suppress--;
+        if (suppress === 0 && pending) { pending = false; dispatch(); }
+      }
+    }
 
     // add() is an idempotent "mark selected": re-adding an existing key overwrites
     // the stored lead data but intentionally does NOT re-notify (selection count is unchanged).
@@ -46,7 +56,7 @@
     function subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }
 
     return {
-      add, remove, has, toggle, clear, subscribe,
+      add, remove, has, toggle, clear, batch, subscribe,
       size: () => map.size,
       keys: () => Array.from(map.keys()),
       values: () => Array.from(map.values()),

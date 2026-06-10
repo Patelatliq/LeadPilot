@@ -129,6 +129,10 @@ function clearQueue() {
         const cb = el.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
     });
+    document.querySelectorAll('[data-lp-row]').forEach(el => {
+        delete el.dataset.lpRow;
+        delete el._lpData;
+    });
 }
 
 // =============================================
@@ -253,7 +257,6 @@ function injectSelectAll() {
                 clearQueue();
             }
             textEl.textContent = 'Select All for LeadPilot';
-            updateSelectAllState();
         });
     } catch (err) {
         console.warn('[LeadPilot] Select All injection skipped:', err.message);
@@ -262,21 +265,25 @@ function injectSelectAll() {
 
 function selectAllRowsForLeadPilot() {
     const rows = document.querySelectorAll('[data-lp-hooked]');
-    rows.forEach(row => {
-        const data = row._lpData || extractFromRow(row);
-        if (!row.dataset.lpRow) {
-            row.dataset.lpRow = data.linkedinUrl || '';
-            row._lpData = data;
-        }
-        if (selectionStore.has(row.dataset.lpRow)) return;
-        if (data.linkedinUrl) {
-            selectionStore.add(data);
-            row.classList.add('lp-row-selected');
-            applyCheckboxGlow(row, 'leadpilot');
-            // Tick the native checkbox
-            const cb = row.querySelector('input[type="checkbox"]');
-            if (cb) cb.checked = true;
-        }
+    selectionStore.batch(() => {
+        rows.forEach(row => {
+            const data = row._lpData || extractFromRow(row);
+            if (!row.dataset.lpRow) {
+                if (data.linkedinUrl) {
+                    row.dataset.lpRow = data.linkedinUrl;
+                    row._lpData = data;
+                }
+            }
+            if (row.dataset.lpRow && selectionStore.has(row.dataset.lpRow)) return;
+            if (data.linkedinUrl) {
+                selectionStore.add(data);
+                row.classList.add('lp-row-selected');
+                applyCheckboxGlow(row, 'leadpilot');
+                // Tick the native checkbox
+                const cb = row.querySelector('input[type="checkbox"]');
+                if (cb) cb.checked = true;
+            }
+        });
     });
 }
 
@@ -618,7 +625,8 @@ function initProfileUrlObserver() {
                         linkedInProfileUrlCache.set(salesUrl, profileUrl);
 
                         // Immediately update any matching queued lead
-                        const lead = selectionStore.values().find(l => l.linkedinUrl === salesUrl);
+                        const k = window.LeadPilot.urlKey(salesUrl);
+                        const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                         if (lead && !lead.linkedinProfileUrl) {
                             lead.linkedinProfileUrl = profileUrl;
                             pendingProfileFetches.delete(salesUrl);
@@ -800,8 +808,10 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
         // rows for the store-driven counters / select-all state.
         if (!row.dataset.lpRow) {
             const d = extractFromRow(row);
-            row.dataset.lpRow = d.linkedinUrl || '';
-            row._lpData = d;
+            if (d.linkedinUrl) {
+                row.dataset.lpRow = d.linkedinUrl;
+                row._lpData = d;
+            }
         }
 
         linkedinCheckbox.addEventListener('click', function(e) {
@@ -822,8 +832,13 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
 
             const data = row._lpData || extractFromRow(row);
             if (!row.dataset.lpRow) {
-                row.dataset.lpRow = data.linkedinUrl || '';
-                row._lpData = data;
+                if (data.linkedinUrl) {
+                    row.dataset.lpRow = data.linkedinUrl;
+                    row._lpData = data;
+                } else {
+                    // No resolvable URL — can't track this lead.
+                    return;
+                }
             }
 
             // Toggle based on current store membership (the store is the source of truth).
@@ -843,7 +858,8 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 if (!data.linkedinProfileUrl && data.linkedinUrl) {
                     fetchLinkedInProfileUrl(data.linkedinUrl).then(profileUrl => {
                         if (profileUrl) {
-                            const lead = selectionStore.values().find(l => l.linkedinUrl === data.linkedinUrl);
+                            const k = window.LeadPilot.urlKey(data.linkedinUrl);
+                            const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                             if (lead) lead.linkedinProfileUrl = profileUrl;
                         }
                     });

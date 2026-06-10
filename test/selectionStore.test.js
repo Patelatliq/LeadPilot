@@ -79,6 +79,27 @@ test('unsubscribe stops further notifications', () => {
   assert.strictEqual(calls, 1);
 });
 
+test('batch fires a single notification for multiple changes', () => {
+  const s = createSelectionStore();
+  let calls = 0;
+  s.subscribe(() => { calls++; });
+  s.batch(() => {
+    s.add(lead('https://www.linkedin.com/sales/lead/ABC,X'));
+    s.add(lead('https://www.linkedin.com/sales/lead/DEF,Y'));
+    s.add(lead('https://www.linkedin.com/sales/lead/GHI,Z'));
+  });
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(s.size(), 3);
+});
+
+test('batch with no changes fires no notification', () => {
+  const s = createSelectionStore();
+  let calls = 0;
+  s.subscribe(() => { calls++; });
+  s.batch(() => {});
+  assert.strictEqual(calls, 0);
+});
+
 test('a throwing subscriber does not block others', () => {
   const s = createSelectionStore();
   let secondFired = false;
