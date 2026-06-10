@@ -85,7 +85,6 @@ selectionStore.subscribe(() => {
 });
 let lastSavedLeads = null; // For undo functionality
 let undoTimeout = null;
-const pendingProfileFetches = new Map(); // linkedinUrl -> Promise
 const linkedInProfileUrlCache = new Map(); // salesNavUrl -> linkedinProfileUrl
 let lastObservedProfileUrl = '';
 
@@ -629,7 +628,6 @@ function initProfileUrlObserver() {
                         const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                         if (lead && !lead.linkedinProfileUrl) {
                             lead.linkedinProfileUrl = profileUrl;
-                            pendingProfileFetches.delete(salesUrl);
                         }
                     } else {
                         // No Sales Nav link nearby — store as most recently observed
@@ -668,51 +666,10 @@ function findPublicIdOnCurrentPage(salesNavUrl) {
     return '';
 }
 
-async function fetchLinkedInProfileUrl(salesNavUrl) {
-    // Strategy 1: search current page's embedded data (instant, no fetch)
-    const pageResult = findPublicIdOnCurrentPage(salesNavUrl);
-    if (pageResult) return pageResult;
-
-    // Strategy 2: fetch the Sales Navigator profile page HTML
-    try {
-        const resp = await fetch(salesNavUrl, {
-            credentials: 'include',
-            headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }
-        });
-        if (resp.ok) {
-            const html = await resp.text();
-            const m1 = html.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
-            if (m1) return 'https://www.linkedin.com/in/' + m1[1];
-            const m2 = html.match(/"vanityName"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
-            if (m2) return 'https://www.linkedin.com/in/' + m2[1];
-            const m3 = html.match(/href="(https:\/\/www\.linkedin\.com\/in\/[^"?#]+)/);
-            if (m3) return m3[1];
-        }
-    } catch(e) {}
-
-    // Strategy 3: Sales Navigator internal API
-    try {
-        const handle = salesNavUrl.match(/\/sales\/(?:lead|people)\/([^,?#]+)/)?.[1];
-        const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1] || 'ajax:0';
-        if (handle) {
-            const apiUrl = `https://www.linkedin.com/sales-api/salesApiProfiles?handles=${encodeURIComponent(handle)}&decorationId=com.linkedin.sales.deco.desktop.openlink.SalesProfile-7`;
-            const apiResp = await fetch(apiUrl, {
-                credentials: 'include',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-RestLi-Protocol-Version': '2.0.0',
-                    'Csrf-Token': csrf,
-                }
-            });
-            if (apiResp.ok) {
-                const text = await apiResp.text();
-                const m = text.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
-                if (m) return 'https://www.linkedin.com/in/' + m[1];
-            }
-        }
-    } catch(e) {}
-
-    return '';
+// ACCOUNT SAFETY (spec §9): passive only — read the profile id from data already
+// present on the current page. No background page fetch, no internal sales-api calls.
+function resolveProfileUrlPassive(salesNavUrl) {
+  return findPublicIdOnCurrentPage(salesNavUrl) || '';
 }
 
 // =============================================
@@ -849,21 +806,14 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 removeCheckboxGlow(row);
                 linkedinCheckbox.checked = false; // uncheck the tick
             } else {
-                // Select for LeadPilot
+                // Select for LeadPilot — resolve profile URL passively (no background fetch).
+                if (!data.linkedinProfileUrl && data.linkedinUrl) {
+                    data.linkedinProfileUrl = resolveProfileUrlPassive(data.linkedinUrl);
+                }
                 selectionStore.add(data);
                 row.classList.add('lp-row-selected');
                 linkedinCheckbox.checked = true; // show the tick
                 applyCheckboxGlow(row, 'leadpilot');
-
-                if (!data.linkedinProfileUrl && data.linkedinUrl) {
-                    fetchLinkedInProfileUrl(data.linkedinUrl).then(profileUrl => {
-                        if (profileUrl) {
-                            const k = window.LeadPilot.urlKey(data.linkedinUrl);
-                            const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
-                            if (lead) lead.linkedinProfileUrl = profileUrl;
-                        }
-                    });
-                }
             }
             // renderPanel / updateModeBarUI / updateSelectAllState fire via the store subscription.
         }, true);
@@ -1120,19 +1070,10 @@ function renderPanel() {
 // =============================================
 // SAVE ALL LEADS
 // =============================================
-async function saveAllLeads() {
+function saveAllLeads() {
     if (selectionStore.size() === 0) return;
 
-    // Wait for any in-flight profile URL fetches before opening the modal
-    if (pendingProfileFetches.size > 0) {
-        const saveBtn = document.getElementById('lp-save-all');
-        const saveLabel = saveBtn?.querySelector('.lp-save-label');
-        const origText = saveLabel?.textContent;
-        if (saveLabel) saveLabel.textContent = 'Fetching URLs…';
-        await Promise.allSettled(pendingProfileFetches.values());
-        if (saveLabel && origText) saveLabel.textContent = origText;
-    }
-
+    // Profile-URL resolution is synchronous & passive now — open the modal immediately.
     const tabs = getSelectedTabs();
     showReviewModal([...selectionStore.values()], tabs, false);
 }
