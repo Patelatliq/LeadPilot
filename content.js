@@ -76,7 +76,13 @@ function getPageType() {
 // =============================================
 // SELECTED LEADS QUEUE
 // =============================================
-let selectedLeads = [];
+const selectionStore = window.LeadPilot.createSelectionStore();
+// Single source of truth: re-render panel + select-all whenever selection changes.
+selectionStore.subscribe(() => {
+    renderPanel();
+    updateModeBarUI();
+    updateSelectAllState();
+});
 let lastSavedLeads = null; // For undo functionality
 let undoTimeout = null;
 const pendingProfileFetches = new Map(); // linkedinUrl -> Promise
@@ -90,40 +96,32 @@ chrome.storage.sync.get(['lpMode'], (result) => {
 });
 
 function addToQueue(data) {
-    if (selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl)) return false;
-    selectedLeads.push(data);
-    renderPanel();
-    updateSelectAllState();
-    return true;
+    // Store keys by canonical url; add() is idempotent and only notifies on first insert.
+    return selectionStore.add(data);
 }
 
-function removeFromQueue(index) {
-    const removed = selectedLeads[index];
-    selectedLeads.splice(index, 1);
+function removeFromQueue(url) {
+    const removed = selectionStore.remove(url);
 
-    // Remove highlight from the corresponding row on the page
-    if (removed && removed.linkedinUrl) {
-        document.querySelectorAll('[data-lp-hooked] a[href*="/sales/lead/"], [data-lp-hooked] a[href*="/sales/people/"]').forEach(linkEl => {
-            const rowUrl = linkEl.href.split('?')[0];
-            if (rowUrl === removed.linkedinUrl) {
-                const row = linkEl.closest('tr, li, div[data-view-name]');
-                if (row) {
-                    row.classList.remove('lp-row-selected');
-                    removeCheckboxGlow(row);
-                    // Uncheck the native checkbox
-                    const cb = row.querySelector('input[type="checkbox"]');
-                    if (cb) cb.checked = false;
-                }
+    // Remove highlight from the corresponding row(s) on the page (match by stable key)
+    if (removed) {
+        const key = window.LeadPilot.urlKey(url);
+        document.querySelectorAll('[data-lp-row]').forEach(row => {
+            if (window.LeadPilot.urlKey(row.dataset.lpRow) === key) {
+                row.classList.remove('lp-row-selected');
+                removeCheckboxGlow(row);
+                // Uncheck the native checkbox
+                const cb = row.querySelector('input[type="checkbox"]');
+                if (cb) cb.checked = false;
             }
         });
     }
 
-    renderPanel();
-    updateSelectAllState();
+    return removed;
 }
 
 function clearQueue() {
-    selectedLeads = [];
+    selectionStore.clear();
     document.querySelectorAll('.lp-row-selected').forEach(el => {
         el.classList.remove('lp-row-selected');
         removeCheckboxGlow(el);
@@ -131,8 +129,6 @@ function clearQueue() {
         const cb = el.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = false;
     });
-    renderPanel();
-    updateSelectAllState();
 }
 
 // =============================================
@@ -207,7 +203,7 @@ function updateModeBarUI() {
     // Update counts
     const lpCount = document.getElementById('lp-mode-count-lp');
     const snCount = document.getElementById('lp-mode-count-sn');
-    if (lpCount) lpCount.textContent = selectedLeads.length > 0 ? `(${selectedLeads.length})` : '';
+    if (lpCount) lpCount.textContent = selectionStore.size() > 0 ? `(${selectionStore.size()})` : '';
     if (snCount) {
         const snSelected = document.querySelectorAll('[data-lp-hooked] input[type="checkbox"]:checked').length;
         snCount.textContent = snSelected > 0 ? `(${snSelected})` : '';
@@ -267,10 +263,14 @@ function injectSelectAll() {
 function selectAllRowsForLeadPilot() {
     const rows = document.querySelectorAll('[data-lp-hooked]');
     rows.forEach(row => {
-        if (row.classList.contains('lp-row-selected')) return;
-        const data = extractFromRow(row);
+        const data = row._lpData || extractFromRow(row);
+        if (!row.dataset.lpRow) {
+            row.dataset.lpRow = data.linkedinUrl || '';
+            row._lpData = data;
+        }
+        if (selectionStore.has(row.dataset.lpRow)) return;
         if (data.linkedinUrl) {
-            addToQueue(data);
+            selectionStore.add(data);
             row.classList.add('lp-row-selected');
             applyCheckboxGlow(row, 'leadpilot');
             // Tick the native checkbox
@@ -331,15 +331,17 @@ function injectListCheckboxes_noSelectAll() {
 function updateSelectAllState() {
     const selectAllCb = document.getElementById('lp-select-all-cb');
     if (!selectAllCb) return;
-    const allRows = document.querySelectorAll('[data-lp-hooked]');
-    const selectedRows = document.querySelectorAll('[data-lp-hooked].lp-row-selected');
-    selectAllCb.checked = allRows.length > 0 && selectedRows.length === allRows.length;
-    selectAllCb.indeterminate = selectedRows.length > 0 && selectedRows.length < allRows.length;
+    const rows = document.querySelectorAll('[data-lp-row]');
+    const total = rows.length;
+    let selected = 0;
+    rows.forEach(r => { if (selectionStore.has(r.dataset.lpRow)) selected++; });
+    selectAllCb.checked = total > 0 && selected === total;
+    selectAllCb.indeterminate = selected > 0 && selected < total;
 
     // Update page count
     const pageCount = document.getElementById('lp-page-count');
     if (pageCount) {
-        pageCount.textContent = `(${selectedRows.length}/${allRows.length})`;
+        pageCount.textContent = `(${selected}/${total})`;
     }
 }
 
@@ -351,7 +353,7 @@ function initKeyboardShortcuts() {
         // Ctrl+L = Save all selected leads
         if (e.ctrlKey && !e.shiftKey && e.key === 'l') {
             e.preventDefault();
-            if (selectedLeads.length > 0) {
+            if (selectionStore.size() > 0) {
                 saveAllLeads();
             }
         }
@@ -616,7 +618,7 @@ function initProfileUrlObserver() {
                         linkedInProfileUrlCache.set(salesUrl, profileUrl);
 
                         // Immediately update any matching queued lead
-                        const lead = selectedLeads.find(l => l.linkedinUrl === salesUrl);
+                        const lead = selectionStore.values().find(l => l.linkedinUrl === salesUrl);
                         if (lead && !lead.linkedinProfileUrl) {
                             lead.linkedinProfileUrl = profileUrl;
                             pendingProfileFetches.delete(salesUrl);
@@ -794,6 +796,14 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
 
         row.dataset.lpHooked = 'true';
 
+        // Stamp stable identity on the row once, so [data-lp-row] selects all hooked
+        // rows for the store-driven counters / select-all state.
+        if (!row.dataset.lpRow) {
+            const d = extractFromRow(row);
+            row.dataset.lpRow = d.linkedinUrl || '';
+            row._lpData = d;
+        }
+
         linkedinCheckbox.addEventListener('click', function(e) {
             // Let-through flag for Sales Nav mode or programmatic clicks
             if (row.dataset.lpLetThrough === 'true') {
@@ -810,18 +820,22 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
             e.preventDefault();
             e.stopImmediatePropagation();
 
-            if (row.classList.contains('lp-row-selected')) {
-                // Deselect from LeadPilot
-                const data = extractFromRow(row);
-                const idx = selectedLeads.findIndex(l => l.linkedinUrl === data.linkedinUrl);
-                if (idx >= 0) removeFromQueue(idx);
+            const data = row._lpData || extractFromRow(row);
+            if (!row.dataset.lpRow) {
+                row.dataset.lpRow = data.linkedinUrl || '';
+                row._lpData = data;
+            }
+
+            // Toggle based on current store membership (the store is the source of truth).
+            if (selectionStore.has(row.dataset.lpRow)) {
+                // Deselect from LeadPilot — remove by stable key (THE FIX: decrements count)
+                selectionStore.remove(row.dataset.lpRow);
                 row.classList.remove('lp-row-selected');
                 removeCheckboxGlow(row);
                 linkedinCheckbox.checked = false; // uncheck the tick
             } else {
                 // Select for LeadPilot
-                const data = extractFromRow(row);
-                addToQueue(data);
+                selectionStore.add(data);
                 row.classList.add('lp-row-selected');
                 linkedinCheckbox.checked = true; // show the tick
                 applyCheckboxGlow(row, 'leadpilot');
@@ -829,14 +843,13 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 if (!data.linkedinProfileUrl && data.linkedinUrl) {
                     fetchLinkedInProfileUrl(data.linkedinUrl).then(profileUrl => {
                         if (profileUrl) {
-                            const lead = selectedLeads.find(l => l.linkedinUrl === data.linkedinUrl);
+                            const lead = selectionStore.values().find(l => l.linkedinUrl === data.linkedinUrl);
                             if (lead) lead.linkedinProfileUrl = profileUrl;
                         }
                     });
                 }
             }
-            updateModeBarUI();
-            updateSelectAllState();
+            // renderPanel / updateModeBarUI / updateSelectAllState fire via the store subscription.
         }, true);
     });
 
@@ -1036,28 +1049,31 @@ function renderPanel() {
     const saveBtn = document.getElementById('lp-save-all');
     if (!container) return;
 
-    countEl.textContent = selectedLeads.length;
-    saveBtn.disabled = selectedLeads.length === 0;
+    const leads = selectionStore.values();
+    const count = selectionStore.size();
+
+    countEl.textContent = count;
+    saveBtn.disabled = count === 0;
 
     // Sync pill count
     const pillCount = document.getElementById('lp-pill-count');
-    if (pillCount) pillCount.textContent = selectedLeads.length > 0 ? selectedLeads.length : '';
+    if (pillCount) pillCount.textContent = count > 0 ? count : '';
 
     // Update save button label with count
     const saveLabel = saveBtn.querySelector('.lp-save-label');
     if (saveLabel) {
-        saveLabel.textContent = selectedLeads.length > 0
-            ? `Save ${selectedLeads.length} Lead${selectedLeads.length !== 1 ? 's' : ''}`
+        saveLabel.textContent = count > 0
+            ? `Save ${count} Lead${count !== 1 ? 's' : ''}`
             : 'Save All to Sheet';
     }
 
     // Update lead count: X / Y on page
-    const totalOnPage = document.querySelectorAll('.lp-row-checkbox:not(#lp-select-all-cb)').length;
+    const totalOnPage = document.querySelectorAll('[data-lp-row]').length;
     if (totalCountEl) {
         totalCountEl.textContent = totalOnPage > 0 ? `/ ${totalOnPage} on page` : '';
     }
 
-    if (selectedLeads.length === 0) {
+    if (count === 0) {
         container.innerHTML = `
       <div class="lp-empty-state">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
@@ -1066,7 +1082,7 @@ function renderPanel() {
         return;
     }
 
-    container.innerHTML = selectedLeads.map((lead, i) => `
+    container.innerHTML = leads.map((lead) => `
     <div class="lp-card">
       <div class="lp-card-avatar">${(lead.firstName?.[0] || '?').toUpperCase()}</div>
       <div class="lp-card-info">
@@ -1074,14 +1090,14 @@ function renderPanel() {
         <div class="lp-card-detail">${lead.jobTitle || '—'}</div>
         <div class="lp-card-detail">${lead.companyName || '—'} · ${lead.city || ''}${lead.country ? ', ' + lead.country : ''}</div>
       </div>
-      <button class="lp-card-remove" data-index="${i}" title="Remove" aria-label="Remove lead">
+      <button class="lp-card-remove" data-url="${escapeAttr(lead.linkedinUrl)}" title="Remove" aria-label="Remove lead">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
   `).join('');
 
     container.querySelectorAll('.lp-card-remove').forEach(btn => {
-        btn.addEventListener('click', () => removeFromQueue(parseInt(btn.dataset.index)));
+        btn.addEventListener('click', () => removeFromQueue(btn.dataset.url));
     });
 }
 
@@ -1089,7 +1105,7 @@ function renderPanel() {
 // SAVE ALL LEADS
 // =============================================
 async function saveAllLeads() {
-    if (selectedLeads.length === 0) return;
+    if (selectionStore.size() === 0) return;
 
     // Wait for any in-flight profile URL fetches before opening the modal
     if (pendingProfileFetches.size > 0) {
@@ -1102,7 +1118,7 @@ async function saveAllLeads() {
     }
 
     const tabs = getSelectedTabs();
-    showReviewModal([...selectedLeads], tabs, false);
+    showReviewModal([...selectionStore.values()], tabs, false);
 }
 
 // =============================================
@@ -1704,9 +1720,11 @@ function main() {
         document.querySelectorAll('[data-lp-hooked]').forEach(el => {
             removeCheckboxGlow(el);
             delete el.dataset.lpHooked;
+            delete el.dataset.lpRow;
+            delete el._lpData;
         });
         document.querySelectorAll('.lp-row-selected').forEach(el => el.classList.remove('lp-row-selected'));
-        selectedLeads = [];
+        selectionStore.clear();
     }
 
     try {
