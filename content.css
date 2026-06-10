@@ -1512,3 +1512,111 @@
     background: rgba(251,191,36,0.22) !important;
     border-color: rgba(251,191,36,0.45) !important;
 }
+
+/* =============================================
+   OPERATOR PANEL — v9 LAYOUT
+   (header big-count, summary strip, detailed cards, footer)
+   ============================================= */
+
+/* Brand mark in header */
+.lp-logo-mark {
+    width: 24px; height: 24px;
+    background: var(--lp-accent);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.lp-logo-text {
+    font-size: 14px; font-weight: 800; letter-spacing: 0.01em;
+    color: var(--lp-text-1);
+}
+.lp-panel-logo { gap: 8px; }
+
+/* Header right: big count + minimize */
+.lp-header-right { display: flex; align-items: center; gap: 10px; }
+.lp-header-count { display: flex; align-items: baseline; gap: 5px; }
+.lp-header-count-n {
+    font-family: var(--lp-mono);
+    font-size: 20px; font-weight: 500; line-height: 1;
+    color: var(--lp-accent-lt);
+}
+.lp-header-count-l {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--lp-text-3);
+}
+
+/* Summary strip */
+.lp-summary {
+    display: flex; align-items: stretch;
+    background: var(--lp-s2);
+    border-bottom: 1px solid var(--lp-border);
+}
+.lp-sum-item {
+    flex: 1; padding: 9px 12px; text-align: center;
+    border-right: 1px solid var(--lp-border);
+}
+.lp-sum-item:last-child { border-right: none; }
+.lp-sum-n {
+    font-family: var(--lp-mono); font-size: 15px; font-weight: 500;
+    line-height: 1; color: var(--lp-text-1);
+}
+.lp-sum-l {
+    font-size: 9px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--lp-text-3); margin-top: 4px;
+}
+
+/* Cards container padding in new layout */
+.lp-cards-container { padding: 8px; max-height: 280px; gap: 6px; }
+
+/* Detailed lead card */
+.lp-card {
+    flex-direction: column; align-items: stretch; gap: 0;
+    padding: 0; overflow: hidden;
+}
+.lp-card-top {
+    display: flex; align-items: flex-start; gap: 9px;
+    padding: 9px 10px;
+}
+.lp-card-avatar { width: 30px; height: 30px; border-radius: 50%; font-size: 11px; }
+.lp-card-info { flex: 1; min-width: 0; }
+.lp-card-name { font-size: 12px; font-weight: 700; }
+.lp-card-detail { font-size: 10px; color: var(--lp-text-2); margin-top: 1px; }
+.lp-card-meta {
+    display: flex; align-items: stretch;
+    border-top: 1px solid var(--lp-border);
+}
+.lp-meta-cell {
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; gap: 5px;
+    padding: 6px 10px;
+    font-size: 9px; font-weight: 500; color: var(--lp-text-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lp-meta-cell + .lp-meta-cell { border-left: 1px solid var(--lp-border); }
+.lp-meta-cell svg { color: var(--lp-text-3); flex-shrink: 0; }
+
+/* Footer */
+.lp-footer { padding: 8px; border-top: 1px solid var(--lp-border); }
+.lp-btn-save {
+    width: 100%; justify-content: center; gap: 7px;
+    padding: 10px; border-radius: 7px; margin-top: 4px;
+    font-size: 13px; font-weight: 700; letter-spacing: 0.02em;
+}
+.lp-footer-meta {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 8px;
+}
+.lp-shortcut-hint {
+    font-family: var(--lp-mono); font-size: 9px; color: var(--lp-text-3);
+}
+.lp-kbd {
+    display: inline-block; background: var(--lp-s3);
+    border: 1px solid var(--lp-border-hv); border-radius: 3px;
+    padding: 0 4px; font-size: 9px; color: var(--lp-text-2);
+}
+.lp-btn-clear {
+    background: none; border: none; color: var(--lp-text-3);
+    font-family: var(--lp-ui); font-size: 11px; font-weight: 600;
+    cursor: pointer; padding: 2px 4px;
+}
+.lp-btn-clear:hover { color: var(--lp-error); }

@@ -932,41 +932,48 @@ function injectPanel() {
 
     <div class="lp-panel-header">
       <div class="lp-panel-logo">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-        </svg>
-        <span>LeadPilot</span>
+        <span class="lp-logo-mark">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </span>
+        <span class="lp-logo-text">LeadPilot</span>
       </div>
-      <button id="lp-panel-toggle" class="lp-toggle-btn" title="Minimize">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      </button>
+      <div class="lp-header-right">
+        <div class="lp-header-count">
+          <span id="lp-count" class="lp-header-count-n">0</span>
+          <span class="lp-header-count-l">Selected</span>
+        </div>
+        <button id="lp-panel-toggle" class="lp-toggle-btn" title="Minimize">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
     </div>
 
     <div id="lp-panel-body" class="lp-collapsed">
-      <div class="lp-section">
-        <div class="lp-section-label">
-          <span>Selected</span>
-          <span id="lp-count" class="lp-badge">0</span>
-          <span id="lp-total-count" class="lp-total-count"></span>
-        </div>
-        <div id="lp-cards-container" class="lp-cards-container">
-          <div class="lp-empty-state">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
-            <p>Select leads using checkboxes</p>
-          </div>
+      <div class="lp-summary">
+        <div class="lp-sum-item"><div id="lp-sum-queued" class="lp-sum-n">0</div><div class="lp-sum-l">Queued</div></div>
+        <div class="lp-sum-item"><div id="lp-sum-onpage" class="lp-sum-n">0</div><div class="lp-sum-l">On page</div></div>
+      </div>
+
+      <div id="lp-cards-container" class="lp-cards-container">
+        <div class="lp-empty-state">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+          <p>Select leads using checkboxes</p>
         </div>
       </div>
 
-      ${getTabSelectorHTML()}
-
-      <div class="lp-actions">
+      <div class="lp-footer">
+        ${getTabSelectorHTML()}
         <button id="lp-save-all" class="lp-btn-save" disabled>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          <span class="lp-save-label">Save All to Sheet</span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span class="lp-save-label">Save Leads to Sheet</span>
         </button>
-        <span class="lp-shortcut-hint">Ctrl+L</span>
-        <button id="lp-clear" class="lp-btn-clear">Clear</button>
+        <div class="lp-footer-meta">
+          <span class="lp-shortcut-hint"><span class="lp-kbd">Ctrl</span>+<span class="lp-kbd">L</span> quick save</span>
+          <button id="lp-clear" class="lp-btn-clear">Clear all</button>
+        </div>
       </div>
 
       <div id="lp-status-bar" class="lp-status-bar"></div>
@@ -1009,56 +1016,70 @@ function injectPanel() {
 function renderPanel() {
     const container = document.getElementById('lp-cards-container');
     const countEl = document.getElementById('lp-count');
-    const totalCountEl = document.getElementById('lp-total-count');
     const saveBtn = document.getElementById('lp-save-all');
     if (!container) return;
 
     const leads = selectionStore.values();
     const count = selectionStore.size();
 
-    countEl.textContent = count;
-    saveBtn.disabled = count === 0;
+    if (countEl) countEl.textContent = count;
+    if (saveBtn) saveBtn.disabled = count === 0;
 
     // Sync pill count
     const pillCount = document.getElementById('lp-pill-count');
     if (pillCount) pillCount.textContent = count > 0 ? count : '';
 
     // Update save button label with count
-    const saveLabel = saveBtn.querySelector('.lp-save-label');
+    const saveLabel = saveBtn ? saveBtn.querySelector('.lp-save-label') : null;
     if (saveLabel) {
         saveLabel.textContent = count > 0
-            ? `Save ${count} Lead${count !== 1 ? 's' : ''}`
-            : 'Save All to Sheet';
+            ? `Save ${count} Lead${count !== 1 ? 's' : ''} to Sheet`
+            : 'Save Leads to Sheet';
     }
 
-    // Update lead count: X / Y on page
+    // Summary strip: Queued (selected) + On page (hooked rows)
     const totalOnPage = document.querySelectorAll('[data-lp-row]').length;
-    if (totalCountEl) {
-        totalCountEl.textContent = totalOnPage > 0 ? `/ ${totalOnPage} on page` : '';
-    }
+    const queuedEl = document.getElementById('lp-sum-queued');
+    const onPageEl = document.getElementById('lp-sum-onpage');
+    if (queuedEl) queuedEl.textContent = count;
+    if (onPageEl) onPageEl.textContent = totalOnPage;
 
     if (count === 0) {
         container.innerHTML = `
       <div class="lp-empty-state">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
         <p>Select leads using checkboxes</p>
       </div>`;
         return;
     }
 
-    container.innerHTML = leads.map((lead) => `
+    container.innerHTML = leads.map((lead) => {
+        const fullName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || '—';
+        const loc = [lead.city, lead.country].filter(Boolean).join(', ');
+        return `
     <div class="lp-card">
-      <div class="lp-card-avatar">${(lead.firstName?.[0] || '?').toUpperCase()}</div>
-      <div class="lp-card-info">
-        <div class="lp-card-name">${lead.firstName} ${lead.lastName}</div>
-        <div class="lp-card-detail">${lead.jobTitle || '—'}</div>
-        <div class="lp-card-detail">${lead.companyName || '—'} · ${lead.city || ''}${lead.country ? ', ' + lead.country : ''}</div>
+      <div class="lp-card-top">
+        <div class="lp-card-avatar">${(lead.firstName?.[0] || '?').toUpperCase()}</div>
+        <div class="lp-card-info">
+          <div class="lp-card-name">${escapeAttr(fullName)}</div>
+          <div class="lp-card-detail">${escapeAttr(lead.jobTitle || '—')}</div>
+        </div>
+        <button class="lp-card-remove" data-url="${escapeAttr(lead.linkedinUrl)}" title="Remove" aria-label="Remove lead">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
-      <button class="lp-card-remove" data-url="${escapeAttr(lead.linkedinUrl)}" title="Remove" aria-label="Remove lead">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
+      <div class="lp-card-meta">
+        <span class="lp-meta-cell">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+          ${escapeAttr(lead.companyName || '—')}
+        </span>
+        <span class="lp-meta-cell">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="11" r="3"/><path d="M17.657 16.657L13.414 20.9a2 2 0 0 1-2.827 0l-4.244-4.243a8 8 0 1 1 11.314 0z"/></svg>
+          ${escapeAttr(loc || '—')}
+        </span>
+      </div>
     </div>
-  `).join('');
+  `;}).join('');
 
     container.querySelectorAll('.lp-card-remove').forEach(btn => {
         btn.addEventListener('click', () => removeFromQueue(btn.dataset.url));
