@@ -236,13 +236,11 @@ function injectSelectAll() {
                 <span id="lp-page-count" class="lp-page-count"></span>
             </label>
         `;
-        // Insert after the mode bar
-        const modeBar = document.getElementById('lp-mode-bar');
-        if (modeBar && modeBar.nextSibling) {
-            container.parentElement.insertBefore(bar, modeBar.nextSibling);
-        } else {
-            container.parentElement.insertBefore(bar, container);
-        }
+        // Insert the bar directly before the results container. The mode bar is
+        // position:fixed and lives on document.body, so it is NOT a valid anchor
+        // here — using it caused insertBefore() to throw "node ... is not a child
+        // of this node". `container` is always a child of its own parentElement.
+        container.parentElement.insertBefore(bar, container);
 
         document.getElementById('lp-select-all-cb').addEventListener('change', async (e) => {
             const checked = e.target.checked;
