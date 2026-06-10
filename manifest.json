@@ -21,6 +21,9 @@
         "https://www.linkedin.com/*"
       ],
       "js": [
+        "src/lib/urlKey.js",
+        "src/lib/selectionStore.js",
+        "src/lib/selectors.js",
         "content.js"
       ],
       "css": [
