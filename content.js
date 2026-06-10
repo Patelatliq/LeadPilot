@@ -1660,13 +1660,15 @@ function updateStatus(msg, color = '#94a3b8') {
 // =============================================
 // MAIN LOOP
 // =============================================
-let lastUrl = '';
+let lastPath = '';
 function main() {
-    const currentUrl = window.location.href;
+    // M4: compare PATHNAME only — query-string changes (filters, pagination,
+    // sessionId) must NOT wipe the selection queue. Only a real list/page change does.
+    const currentPath = window.location.pathname;
     const pageType = getPageType();
 
-    if (currentUrl !== lastUrl) {
-        lastUrl = currentUrl;
+    if (currentPath !== lastPath) {
+        lastPath = currentPath;
         const oldPanel = document.getElementById('lp-panel');
         if (oldPanel) oldPanel.remove();
         const oldSelectAll = document.getElementById('lp-select-all-bar');
