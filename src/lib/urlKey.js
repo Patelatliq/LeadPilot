@@ -9,6 +9,8 @@
     s = s.toLowerCase();
     s = s.replace(/(\/sales\/(?:lead|people)\/)([^/,]+).*$/, '$1$2');
     s = s.replace(/\/+$/, '');
+    // Only accept canonical linkedin.com URLs that have a path; reject bare host / foreign hosts.
+    if (!s.startsWith('linkedin.com/')) return '';
     return s;
   }
   root.LeadPilot = root.LeadPilot || {};

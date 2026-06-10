@@ -32,3 +32,15 @@ test('returns empty string for falsy input', () => {
   assert.strictEqual(urlKey(null), '');
   assert.strictEqual(urlKey(undefined), '');
 });
+
+test('handles /sales/people/ path variant', () => {
+  assert.strictEqual(
+    urlKey('https://www.linkedin.com/sales/people/ABC123,NAME_SEARCH'),
+    'linkedin.com/sales/people/abc123'
+  );
+});
+
+test('returns empty string for bare root and non-linkedin hosts', () => {
+  assert.strictEqual(urlKey('/'), '');
+  assert.strictEqual(urlKey('https://example.com/sales/lead/ABC'), '');
+});

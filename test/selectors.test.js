@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { SELECTORS, resolveText } = require('../src/lib/selectors.js');
+const { SELECTORS, resolveText, resolveEl } = require('../src/lib/selectors.js');
 
 function fakeRoot(map) {
   return {
@@ -31,4 +31,18 @@ test('resolveText falls through to a later candidate when earlier ones miss', ()
 
 test('resolveText returns empty string when nothing matches', () => {
   assert.strictEqual(resolveText(SELECTORS.personName, fakeRoot({})), '');
+});
+
+test('resolveEl returns the first matching element', () => {
+  const root = fakeRoot({ '[data-anonymize="person-name"]': 'X' });
+  const el = resolveEl(SELECTORS.personName, root);
+  assert.ok(el && el.textContent === 'X');
+});
+
+test('resolveEl returns null when nothing matches', () => {
+  assert.strictEqual(resolveEl(SELECTORS.personName, fakeRoot({})), null);
+});
+
+test('resolveEl returns null for null scope', () => {
+  assert.strictEqual(resolveEl(SELECTORS.personName, null), null);
 });

@@ -68,3 +68,22 @@ test('clear empties the store', () => {
   s.clear();
   assert.strictEqual(s.size(), 0);
 });
+
+test('unsubscribe stops further notifications', () => {
+  const s = createSelectionStore();
+  let calls = 0;
+  const unsub = s.subscribe(() => { calls++; });
+  s.add(lead('https://www.linkedin.com/sales/lead/ABC,X'));
+  unsub();
+  s.add(lead('https://www.linkedin.com/sales/lead/DEF,Y'));
+  assert.strictEqual(calls, 1);
+});
+
+test('a throwing subscriber does not block others', () => {
+  const s = createSelectionStore();
+  let secondFired = false;
+  s.subscribe(() => { throw new Error('boom'); });
+  s.subscribe(() => { secondFired = true; });
+  s.add(lead('https://www.linkedin.com/sales/lead/ABC,X'));
+  assert.strictEqual(secondFired, true);
+});

@@ -9,6 +9,8 @@
 
     function notify() { subs.forEach(fn => { try { fn(); } catch (e) {} }); }
 
+    // add() is an idempotent "mark selected": re-adding an existing key overwrites
+    // the stored lead data but intentionally does NOT re-notify (selection count is unchanged).
     function add(lead) {
       const key = urlKey(lead && lead.linkedinUrl);
       if (!key) return false;
