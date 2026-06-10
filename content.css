@@ -2,7 +2,7 @@
    LEADPILOT — Content Script Styles v3
    ============================================= */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
 
 /* Design tokens — prefixed to avoid LinkedIn CSS collisions */
 #lp-panel, #lp-review-overlay, #lp-select-all-bar {
@@ -12,17 +12,18 @@
     --lp-s3:        #1c2b47;
     --lp-border:    rgba(255,255,255,0.07);
     --lp-border-hv: rgba(255,255,255,0.13);
-    --lp-accent:    #4f46e5;
-    --lp-accent-dk: #4338ca;
-    --lp-accent-lt: #818cf8;
+    --lp-accent:    #4361c2;
+    --lp-accent-dk: #35509f;
+    --lp-accent-lt: #8aa1ec;
     --lp-cyan:      #22d3ee;
-    --lp-success:   #22c55e;
-    --lp-warning:   #f59e0b;
+    --lp-success:   #34d399;
+    --lp-warning:   #fbbf24;
     --lp-error:     #ef4444;
-    --lp-text-1:    #f8fafc;
-    --lp-text-2:    #94a3b8;
-    --lp-text-3:    #475569;
-    --lp-mono:      'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    --lp-text-1:    #f4f5fa;
+    --lp-text-2:    #c4c6d6;
+    --lp-text-3:    #9a9cb0;
+    --lp-ui:        'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
+    --lp-mono:      'DM Mono', ui-monospace, monospace;
 }
 
 /* =============================================
@@ -39,7 +40,7 @@
     border: 1px solid var(--lp-border);
     border-radius: 14px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.45);
-    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--lp-ui);
     z-index: 99999;
     overflow: hidden;
     transition: width 0.25s ease, max-height 0.25s ease, border-radius 0.25s ease;
@@ -154,9 +155,9 @@
 }
 
 .lp-toggle-btn:hover {
-    background: rgba(79,70,229,0.12);
+    background: rgba(67,97,194,0.12);
     color: var(--lp-accent-lt);
-    border-color: rgba(79,70,229,0.25);
+    border-color: rgba(67,97,194,0.25);
 }
 
 /* --- Panel Body --- */
@@ -169,7 +170,7 @@
 #lp-panel-body::-webkit-scrollbar { width: 3px; }
 #lp-panel-body::-webkit-scrollbar-track { background: transparent; }
 #lp-panel-body::-webkit-scrollbar-thumb {
-    background: rgba(79,70,229,0.25);
+    background: rgba(67,97,194,0.25);
     border-radius: 10px;
 }
 
@@ -223,7 +224,7 @@
 
 .lp-cards-container::-webkit-scrollbar { width: 3px; }
 .lp-cards-container::-webkit-scrollbar-thumb {
-    background: rgba(79,70,229,0.2);
+    background: rgba(67,97,194,0.2);
     border-radius: 10px;
 }
 
@@ -333,7 +334,7 @@
     cursor: pointer;
     font-size: 11px;
     font-weight: 500;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--lp-ui);
     color: var(--lp-text-2);
     transition: border-color 0.15s;
     text-align: left;
@@ -390,11 +391,11 @@
 }
 
 .lp-tab-check-item:hover {
-    background: rgba(79,70,229,0.08);
+    background: rgba(67,97,194,0.08);
 }
 
 .lp-tab-check-item:has(.lp-tab-cb:checked) {
-    background: rgba(79,70,229,0.1);
+    background: rgba(67,97,194,0.1);
 }
 
 .lp-tab-cb {
@@ -457,9 +458,9 @@
 }
 
 .lp-mini-btn:hover {
-    background: rgba(79,70,229,0.12);
+    background: rgba(67,97,194,0.12);
     color: var(--lp-accent-lt);
-    border-color: rgba(79,70,229,0.25);
+    border-color: rgba(67,97,194,0.25);
 }
 
 /* =============================================
@@ -483,7 +484,7 @@
     color: #fff;
     border: none;
     border-radius: 9px;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--lp-ui);
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
@@ -509,7 +510,7 @@
     border: 1px solid var(--lp-border);
     border-radius: 7px;
     padding: 6px;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--lp-ui);
     font-size: 10px;
     font-weight: 600;
     cursor: pointer;
@@ -533,7 +534,7 @@
     color: var(--lp-text-2);
     border: 1px solid var(--lp-border);
     border-radius: 8px;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--lp-ui);
     font-size: 10px;
     font-weight: 600;
     cursor: pointer;
@@ -602,7 +603,7 @@
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 14px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04) inset;
-    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-family: var(--lp-ui);
 }
 
 /* --- Mode buttons --- */
@@ -640,10 +641,10 @@
 
 /* Active states */
 .lp-mode-btn-lp.lp-mode-active {
-    background: rgba(124, 58, 237, 0.2);
-    border-color: rgba(124, 58, 237, 0.4);
+    background: rgba(67, 97, 194, 0.2);
+    border-color: rgba(67, 97, 194, 0.4);
     color: #c4b5fd;
-    box-shadow: 0 0 16px rgba(124, 58, 237, 0.15);
+    box-shadow: 0 0 16px rgba(67, 97, 194, 0.15);
 }
 
 .lp-mode-btn-lp.lp-mode-active svg {
@@ -701,49 +702,62 @@
    VISUAL INDICATORS — ROW HIGHLIGHTS
    ============================================= */
 
-/* LeadPilot selected row — purple theme */
+/* LeadPilot selected row — OPERATOR: 3px accent left-bar + faint left-to-right wash */
 .lp-row-selected {
-    background: linear-gradient(90deg, rgba(124,58,237,0.08) 0%, rgba(124,58,237,0.03) 30%, transparent 60%) !important;
-    box-shadow: inset 4px 0 0 #7c3aed !important;
+    background: linear-gradient(90deg, rgba(67,97,194,0.06) 0%, rgba(67,97,194,0.02) 50%, transparent 100%) !important;
+    box-shadow: inset 3px 0 0 #4361c2 !important;
     transition: background 0.2s, box-shadow 0.2s;
 }
 
 /* =============================================
-   VISUAL INDICATORS — CHECKBOX GLOW + BADGE
+   OPERATOR CUSTOM ROW CHECKBOX
+   Restyle LinkedIn's native row checkbox into a clean filled box + checkmark.
+   Tokens (--lp-*) are not in scope on LinkedIn's DOM, so colors are literal.
    ============================================= */
-
-/* Glow ring around checkbox */
-.lp-glow-parent {
-    position: relative;
+[data-lp-hooked] input[type="checkbox"] {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    width: 18px !important;
+    height: 18px !important;
+    min-width: 18px !important;
+    border-radius: 4px !important;
+    border: 2px solid #c4c2bd !important;
+    background: #fff !important;
+    cursor: pointer !important;
+    position: relative !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    transition: background 0.12s, border-color 0.12s !important;
 }
 
-.lp-glow-purple {
-    border-radius: 4px;
-    box-shadow: 0 0 0 3px rgba(124,58,237,0.3), 0 0 12px rgba(124,58,237,0.15);
-    transition: box-shadow 0.2s;
+[data-lp-hooked] input[type="checkbox"]:hover {
+    border-color: #4361c2 !important;
 }
 
-/* Micro LP badge */
-.lp-micro-badge {
-    position: absolute;
-    bottom: -2px;
-    right: -4px;
-    font-size: 7px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    padding: 1px 3px;
-    border-radius: 3px;
-    line-height: 1;
-    pointer-events: none;
-    z-index: 10;
-    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+[data-lp-hooked] input[type="checkbox"]:checked {
+    background: #4361c2 !important;
+    border-color: #4361c2 !important;
 }
 
-.lp-badge-purple {
-    background: #7c3aed;
-    color: #fff;
-    box-shadow: 0 1px 4px rgba(124,58,237,0.4);
+/* white checkmark */
+[data-lp-hooked] input[type="checkbox"]:checked::after {
+    content: '' !important;
+    position: absolute !important;
+    left: 5px !important;
+    top: 1px !important;
+    width: 4px !important;
+    height: 9px !important;
+    border: solid #fff !important;
+    border-width: 0 2px 2px 0 !important;
+    transform: rotate(45deg) !important;
+    box-sizing: content-box !important;
 }
+
+/* Neutralize the old glow ring + micro-badge; selection now reads via the
+   filled checkbox + row left-bar (cleaner, matches the approved design). */
+.lp-glow-parent { position: relative; }
+.lp-glow-purple, .lp-glow-blue { box-shadow: none !important; border-radius: 0 !important; }
+.lp-micro-badge { display: none !important; }
 
 /* =============================================
    SELECT ALL BAR CHECKBOX (kept for the bar)
@@ -766,8 +780,8 @@
 }
 
 .lp-row-checkbox:checked + .lp-checkmark {
-    background: #4f46e5;
-    border-color: #4f46e5;
+    background: #4361c2;
+    border-color: #4361c2;
 }
 
 .lp-row-checkbox:checked + .lp-checkmark::after {
@@ -790,8 +804,8 @@
     align-items: center;
     padding: 8px 14px;
     margin-bottom: 6px;
-    background: rgba(79,70,229,0.06);
-    border: 1px solid rgba(79,70,229,0.15);
+    background: rgba(67,97,194,0.06);
+    border: 1px solid rgba(67,97,194,0.15);
     border-radius: 10px;
     z-index: 1000;
     position: relative;
@@ -804,7 +818,7 @@
     cursor: pointer;
     font-size: 12px;
     font-weight: 600;
-    color: #818cf8;
+    color: #8aa1ec;
     user-select: none;
 }
 
@@ -855,7 +869,7 @@
     justify-content: center;
     opacity: 0;
     transition: opacity 0.2s ease;
-    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--lp-ui);
 }
 
 #lp-review-overlay.lp-review-visible {
@@ -939,7 +953,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 20px;
-    background: rgba(79,70,229,0.05);
+    background: rgba(67,97,194,0.05);
     border-bottom: 1px solid var(--lp-border);
     font-size: 11px;
     font-weight: 600;
@@ -965,7 +979,7 @@
 .lp-review-body::-webkit-scrollbar { width: 4px; }
 .lp-review-body::-webkit-scrollbar-track { background: transparent; }
 .lp-review-body::-webkit-scrollbar-thumb {
-    background: rgba(79,70,229,0.25);
+    background: rgba(67,97,194,0.25);
     border-radius: 10px;
 }
 
@@ -1148,7 +1162,7 @@
     border-radius: 7px !important;
     color: var(--lp-text-1) !important;
     font-size: 12px !important;
-    font-family: 'Inter', sans-serif !important;
+    font-family: var(--lp-ui) !important;
     font-weight: 500 !important;
     transition: border-color 0.15s, box-shadow 0.15s;
     -webkit-appearance: none !important;
@@ -1177,7 +1191,7 @@
     border-radius: 7px !important;
     color: var(--lp-text-1) !important;
     font-size: 12px !important;
-    font-family: 'Inter', sans-serif !important;
+    font-family: var(--lp-ui) !important;
     font-weight: 500 !important;
     -webkit-text-fill-color: var(--lp-text-1) !important;
     -webkit-appearance: none !important;
@@ -1194,7 +1208,7 @@
 .lp-bulk-apply-bar select:focus {
     border-color: var(--lp-accent-lt) !important;
     outline: none !important;
-    box-shadow: 0 0 0 2px rgba(79,70,229,0.2) !important;
+    box-shadow: 0 0 0 2px rgba(67,97,194,0.2) !important;
 }
 
 #lp-review-overlay select option,
@@ -1211,7 +1225,7 @@
 .lp-review-field select:focus {
     border-color: var(--lp-accent-lt) !important;
     outline: none !important;
-    box-shadow: 0 0 0 2px rgba(79,70,229,0.18) !important;
+    box-shadow: 0 0 0 2px rgba(67,97,194,0.18) !important;
     background: var(--lp-bg) !important;
 }
 
@@ -1255,7 +1269,7 @@
     color: var(--lp-text-3);
     font-size: 10px;
     font-weight: 600;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--lp-ui);
     cursor: pointer;
     padding: 2px 0;
     margin-top: 3px;
@@ -1292,12 +1306,12 @@
 /* --- Industry & Status field borders --- */
 .lp-field-industry select,
 .lp-field-status select {
-    border-color: rgba(79,70,229,0.18);
+    border-color: rgba(67,97,194,0.18);
 }
 
 .lp-field-industry select:hover,
 .lp-field-status select:hover {
-    border-color: rgba(79,70,229,0.35);
+    border-color: rgba(67,97,194,0.35);
 }
 
 /* --- Modal Footer --- */
@@ -1314,7 +1328,7 @@
     flex: 1;
     padding: 10px 14px;
     border-radius: 9px;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--lp-ui);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
@@ -1380,7 +1394,7 @@
     border-radius: 7px !important;
     color: var(--lp-text-1) !important;
     font-size: 12px !important;
-    font-family: 'Inter', sans-serif !important;
+    font-family: var(--lp-ui) !important;
     font-weight: 400 !important;
     -webkit-text-fill-color: var(--lp-text-1) !important;
     resize: vertical;
@@ -1393,7 +1407,7 @@
 .lp-notes-textarea:focus {
     border-color: var(--lp-accent-lt) !important;
     outline: none !important;
-    box-shadow: 0 0 0 2px rgba(79,70,229,0.18) !important;
+    box-shadow: 0 0 0 2px rgba(67,97,194,0.18) !important;
 }
 
 .lp-notes-textarea::placeholder {
@@ -1406,7 +1420,7 @@
    ============================================= */
 .lp-bulk-apply-bar {
     padding: 9px 16px 11px;
-    background: rgba(79,70,229,0.04);
+    background: rgba(67,97,194,0.04);
     border-bottom: 1px solid var(--lp-border);
 }
 
@@ -1437,8 +1451,8 @@
 }
 
 .lp-bulk-apply-btn {
-    background: rgba(79,70,229,0.12) !important;
-    border: 1px solid rgba(79,70,229,0.28) !important;
+    background: rgba(67,97,194,0.12) !important;
+    border: 1px solid rgba(67,97,194,0.28) !important;
     color: var(--lp-accent-lt) !important;
     font-size: 11px !important;
     font-weight: 700 !important;
@@ -1452,8 +1466,8 @@
 }
 
 .lp-bulk-apply-btn:hover {
-    background: rgba(79,70,229,0.22) !important;
-    border-color: rgba(79,70,229,0.45) !important;
+    background: rgba(67,97,194,0.22) !important;
+    border-color: rgba(67,97,194,0.45) !important;
 }
 
 /* =============================================
