@@ -165,7 +165,40 @@ function injectModeToggle() {
 
     document.getElementById('lp-mode-btn-lp').addEventListener('click', () => setMode('leadpilot'));
     document.getElementById('lp-mode-btn-sn').addEventListener('click', () => setMode('salesnav'));
+    makeModeBarDraggable(bar);
     updateModeBarUI();
+}
+
+// Make the floating mode bar draggable. Drag from anywhere on the bar EXCEPT the two
+// mode buttons (so their clicks still work). Move/up listeners live only during a drag
+// (attached on mousedown, removed on mouseup) so nothing leaks across re-injections.
+function makeModeBarDraggable(bar) {
+    bar.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.lp-mode-btn')) return; // let button clicks through
+        const rect = bar.getBoundingClientRect();
+        // Convert from the centered bottom anchor to absolute top/left.
+        bar.style.left = rect.left + 'px';
+        bar.style.top = rect.top + 'px';
+        bar.style.bottom = 'auto';
+        bar.style.transform = 'none';
+        const startX = e.clientX, startY = e.clientY;
+        const startLeft = rect.left, startTop = rect.top;
+
+        function onMove(ev) {
+            const w = bar.offsetWidth, h = bar.offsetHeight;
+            const nl = Math.max(0, Math.min(window.innerWidth - w, startLeft + ev.clientX - startX));
+            const nt = Math.max(0, Math.min(window.innerHeight - h, startTop + ev.clientY - startY));
+            bar.style.left = nl + 'px';
+            bar.style.top = nt + 'px';
+        }
+        function onUp() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        e.preventDefault();
+    });
 }
 
 function setMode(mode) {

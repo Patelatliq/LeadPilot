@@ -591,7 +591,10 @@
     transform: translateX(-50%);
     z-index: 999990;
     pointer-events: auto;
+    cursor: grab;
+    user-select: none;
 }
+#lp-mode-bar:active { cursor: grabbing; }
 
 .lp-mode-bar-inner {
     display: flex;
@@ -643,13 +646,13 @@
 .lp-mode-btn-lp.lp-mode-active {
     background: rgba(67, 97, 194, 0.2);
     border-color: rgba(67, 97, 194, 0.4);
-    color: #c4b5fd;
+    color: #8aa1ec;
     box-shadow: 0 0 16px rgba(67, 97, 194, 0.15);
 }
 
 .lp-mode-btn-lp.lp-mode-active svg {
     opacity: 1;
-    stroke: #a78bfa;
+    stroke: #8aa1ec;
 }
 
 .lp-mode-btn-sn.lp-mode-active {
@@ -678,7 +681,7 @@
 }
 
 .lp-mode-btn-lp.lp-mode-active .lp-mode-dot {
-    background: #a78bfa;
+    background: #8aa1ec;
 }
 
 .lp-mode-btn-sn.lp-mode-active .lp-mode-dot {
