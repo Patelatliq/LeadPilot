@@ -151,6 +151,18 @@ The user's LinkedIn account must not be put at risk of restriction. LinkedIn det
 
 **Tradeoff:** profile `/in/` URL resolves only when present in already-loaded page data; otherwise the field is left empty. The Sales Navigator URL is always captured. No bulk background loads, ever. This supersedes audit item M3.
 
+### §9 UPDATE (2026-06-09) — user reinstated auto-fetch with risk mitigations
+After seeing that passive-only left the LinkedIn Profile URL column largely empty for search-result leads, the user opted back into automatic resolution, explicitly accepting the risk, and asked to "do everything to reduce the risk." Current behavior:
+- **Strategy 1 (passive page read)** runs first and short-circuits with no network call whenever the id is already on the page.
+- **Strategies 2 (profile-page fetch) and 3 (internal sales-api)** are restored as fallbacks but are gated behind a **throttled background queue** with these mitigations:
+  - **Sequential only** — one resolve at a time, never parallel bursts.
+  - **Jittered delays** (~1.5–4s, randomized) between network resolves — fixed cadences are the easiest automation signal; randomization mimics human pacing.
+  - **Dedupe** — a given lead is fetched at most once per session.
+  - **Lazy/spread** — resolution is queued at selection time so requests spread over the user's working time rather than firing in a burst at save.
+  - **Skip-if-deselected** — queued leads removed before processing are skipped (no wasted requests).
+  - Save waits (capped ~12s) for the queue to drain so the review modal shows resolved URLs; unresolved ones remain editable.
+- Residual risk remains non-zero (any request to LinkedIn for a page/endpoint the user didn't open is detectable). This is the user's accepted tradeoff for fill-rate.
+
 ---
 
 ## 7. Decisions (confirmed) & out of scope

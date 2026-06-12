@@ -273,12 +273,17 @@ function selectAllRowsForLeadPilot() {
             }
             if (row.dataset.lpRow && selectionStore.has(row.dataset.lpRow)) return;
             if (data.linkedinUrl) {
+                if (!data.linkedinProfileUrl) {
+                    data.linkedinProfileUrl = resolveProfileUrlPassive(data.linkedinUrl);
+                }
                 selectionStore.add(data);
                 row.classList.add('lp-row-selected');
                 applyCheckboxGlow(row, 'leadpilot');
                 // Tick the native checkbox
                 const cb = row.querySelector('input[type="checkbox"]');
                 if (cb) cb.checked = true;
+                // Queue throttled background resolution for any still unresolved.
+                if (!data.linkedinProfileUrl) enqueueProfileFetch(data.linkedinUrl);
             }
         });
     });
@@ -664,10 +669,109 @@ function findPublicIdOnCurrentPage(salesNavUrl) {
     return '';
 }
 
-// ACCOUNT SAFETY (spec §9): passive only — read the profile id from data already
-// present on the current page. No background page fetch, no internal sales-api calls.
+// Passive: read the profile id from data already on the current page (no network).
 function resolveProfileUrlPassive(salesNavUrl) {
   return findPublicIdOnCurrentPage(salesNavUrl) || '';
+}
+
+// Full resolver (user opted back in to auto-fetch — see spec §9 reversal):
+//  1) passive page read  2) fetch the Sales Nav profile page  3) internal sales-api.
+// Strategies 2 & 3 make network calls and carry account-restriction risk; access is
+// throttled (one at a time, with a delay) via the queue below to avoid bot-like bursts.
+async function fetchLinkedInProfileUrl(salesNavUrl) {
+    const pageResult = findPublicIdOnCurrentPage(salesNavUrl);
+    if (pageResult) return pageResult;
+
+    // Strategy 2: fetch the Sales Navigator profile page HTML
+    try {
+        const resp = await fetch(salesNavUrl, {
+            credentials: 'include',
+            headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }
+        });
+        if (resp.ok) {
+            const html = await resp.text();
+            const m1 = html.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m1) return 'https://www.linkedin.com/in/' + m1[1];
+            const m2 = html.match(/"vanityName"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m2) return 'https://www.linkedin.com/in/' + m2[1];
+            const m3 = html.match(/href="(https:\/\/www\.linkedin\.com\/in\/[^"?#]+)/);
+            if (m3) return m3[1];
+        }
+    } catch (e) {}
+
+    // Strategy 3: Sales Navigator internal API
+    try {
+        const handle = salesNavUrl.match(/\/sales\/(?:lead|people)\/([^,?#]+)/)?.[1];
+        const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1] || 'ajax:0';
+        if (handle) {
+            const apiUrl = `https://www.linkedin.com/sales-api/salesApiProfiles?handles=${encodeURIComponent(handle)}&decorationId=com.linkedin.sales.deco.desktop.openlink.SalesProfile-7`;
+            const apiResp = await fetch(apiUrl, {
+                credentials: 'include',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-RestLi-Protocol-Version': '2.0.0',
+                    'Csrf-Token': csrf,
+                }
+            });
+            if (apiResp.ok) {
+                const text = await apiResp.text();
+                const m = text.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+                if (m) return 'https://www.linkedin.com/in/' + m[1];
+            }
+        }
+    } catch (e) {}
+
+    return '';
+}
+
+// Throttled background queue — resolves profile URLs one at a time with a delay,
+// then writes the result back into the matching queued lead (by canonical key).
+const lpProfileQueue = [];
+let lpProfileBusy = false;
+// Jittered human-like spacing between network resolves (NOT a fixed cadence — fixed
+// intervals are the easiest automation signal to detect). Range ~1.5s–4s.
+function lpProfileDelay() { return 1500 + Math.floor(Math.random() * 2500); }
+
+function enqueueProfileFetch(salesNavUrl) {
+    if (!salesNavUrl) return;
+    const k = window.LeadPilot.urlKey(salesNavUrl);
+    if (lpProfileQueue.some(u => window.LeadPilot.urlKey(u) === k)) return; // dedupe
+    lpProfileQueue.push(salesNavUrl);
+    drainProfileQueue();
+}
+
+async function drainProfileQueue() {
+    if (lpProfileBusy) return;
+    lpProfileBusy = true;
+    try {
+        while (lpProfileQueue.length) {
+            const url = lpProfileQueue.shift();
+            const k = window.LeadPilot.urlKey(url);
+            const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
+            if (!lead || lead.linkedinProfileUrl) continue; // deselected, or already resolved
+            try {
+                const profileUrl = await fetchLinkedInProfileUrl(url);
+                if (profileUrl) {
+                    const still = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
+                    if (still) still.linkedinProfileUrl = profileUrl;
+                }
+            } catch (e) {}
+            if (lpProfileQueue.length) await new Promise(r => setTimeout(r, lpProfileDelay()));
+        }
+    } finally {
+        lpProfileBusy = false;
+    }
+}
+
+// Wait (capped) for the throttled queue to finish so the review modal shows resolved URLs.
+function awaitProfileQueueIdle(maxMs = 12000) {
+    return new Promise(resolve => {
+        const start = Date.now();
+        (function check() {
+            if ((!lpProfileBusy && lpProfileQueue.length === 0) || Date.now() - start > maxMs) return resolve();
+            setTimeout(check, 200);
+        })();
+    });
 }
 
 // =============================================
@@ -804,7 +908,7 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 removeCheckboxGlow(row);
                 linkedinCheckbox.checked = false; // uncheck the tick
             } else {
-                // Select for LeadPilot — resolve profile URL passively (no background fetch).
+                // Select for LeadPilot — try passive resolution first (instant, no network).
                 if (!data.linkedinProfileUrl && data.linkedinUrl) {
                     data.linkedinProfileUrl = resolveProfileUrlPassive(data.linkedinUrl);
                 }
@@ -812,6 +916,11 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 row.classList.add('lp-row-selected');
                 linkedinCheckbox.checked = true; // show the tick
                 applyCheckboxGlow(row, 'leadpilot');
+                // If still unresolved, queue a throttled background fetch (spreads
+                // requests over the time the user keeps selecting — low burst).
+                if (!data.linkedinProfileUrl && data.linkedinUrl) {
+                    enqueueProfileFetch(data.linkedinUrl);
+                }
             }
             // renderPanel / updateModeBarUI / updateSelectAllState fire via the store subscription.
         }, true);
@@ -1089,11 +1198,27 @@ function renderPanel() {
 // =============================================
 // SAVE ALL LEADS
 // =============================================
-function saveAllLeads() {
+async function saveAllLeads() {
     if (selectionStore.size() === 0) return;
 
-    // Profile-URL resolution is synchronous & passive now — open the modal immediately.
     const tabs = getSelectedTabs();
+
+    // Make sure any not-yet-resolved leads get queued, then wait (capped) for the
+    // throttled background resolver to finish so the review modal shows the /in/ URLs.
+    selectionStore.values().forEach(l => {
+        if (!l.linkedinProfileUrl && l.linkedinUrl) enqueueProfileFetch(l.linkedinUrl);
+    });
+    const saveBtn = document.getElementById('lp-save-all');
+    const saveLabel = saveBtn ? saveBtn.querySelector('.lp-save-label') : null;
+    const prevLabel = saveLabel ? saveLabel.textContent : '';
+    if (lpProfileBusy || lpProfileQueue.length) {
+        if (saveBtn) saveBtn.disabled = true;
+        if (saveLabel) saveLabel.textContent = 'Resolving profile URLs…';
+        await awaitProfileQueueIdle();
+        if (saveBtn) saveBtn.disabled = false;
+        if (saveLabel) saveLabel.textContent = prevLabel;
+    }
+
     showReviewModal([...selectionStore.values()], tabs, false);
 }
 
