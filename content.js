@@ -85,8 +85,19 @@ selectionStore.subscribe(() => {
 });
 let lastSavedLeads = null; // For undo functionality
 let undoTimeout = null;
-const linkedInProfileUrlCache = new Map(); // salesNavUrl -> linkedinProfileUrl
+const linkedInProfileUrlCache = new Map(); // canonical urlKey(salesNavUrl) -> linkedinProfileUrl
 let lastObservedProfileUrl = '';
+
+// Cache helpers — keyed by canonical urlKey so observed /in/ URLs match a lead
+// regardless of query-string / www / comma-suffix variants (otherwise raw-key misses
+// caused unnecessary network fetches).
+function cacheProfileUrl(salesNavUrl, profileUrl) {
+    const k = window.LeadPilot.urlKey(salesNavUrl);
+    if (k && profileUrl) linkedInProfileUrlCache.set(k, profileUrl);
+}
+function getCachedProfileUrl(salesNavUrl) {
+    return linkedInProfileUrlCache.get(window.LeadPilot.urlKey(salesNavUrl)) || '';
+}
 
 // Mode: 'leadpilot' or 'salesnav' — persisted via chrome.storage
 let lpMode = 'leadpilot';
@@ -611,7 +622,7 @@ function extractFromRow(row) {
     }
 
     // Try to find the LinkedIn /in/ profile URL — cache first (populated by MutationObserver)
-    let linkedinProfileUrl = linkedInProfileUrlCache.get(linkedinUrl) || '';
+    let linkedinProfileUrl = getCachedProfileUrl(linkedinUrl);
     if (!linkedinProfileUrl) {
         const profileLinkEl = row.querySelector('a[href*="linkedin.com/in/"], a[href*="/in/"]');
         if (profileLinkEl && !profileLinkEl.href.includes('/sales/')) {
@@ -657,7 +668,7 @@ function initProfileUrlObserver() {
                     const salesLink = panel?.querySelector('a[href*="/sales/lead/"], a[href*="/sales/people/"]');
                     if (salesLink) {
                         const salesUrl = salesLink.href.split('?')[0];
-                        linkedInProfileUrlCache.set(salesUrl, profileUrl);
+                        cacheProfileUrl(salesUrl, profileUrl);
 
                         // Immediately update any matching queued lead
                         const k = window.LeadPilot.urlKey(salesUrl);
@@ -702,9 +713,10 @@ function findPublicIdOnCurrentPage(salesNavUrl) {
     return '';
 }
 
-// Passive: read the profile id from data already on the current page (no network).
+// Passive: cache first (URLs the observer captured from rendered previews/details),
+// then the current page's embedded SSR data. No network call either way.
 function resolveProfileUrlPassive(salesNavUrl) {
-  return findPublicIdOnCurrentPage(salesNavUrl) || '';
+  return getCachedProfileUrl(salesNavUrl) || findPublicIdOnCurrentPage(salesNavUrl) || '';
 }
 
 // Option B resolver: passive page read is done by the caller; this performs ONLY
