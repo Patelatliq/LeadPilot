@@ -746,14 +746,40 @@ async function fetchProfileUrlViaPage(salesNavUrl) {
 // then writes the result back into the matching queued lead (by canonical key).
 const lpProfileQueue = [];
 let lpProfileBusy = false;
-// Per-session cap on NETWORK fetches (passive resolves don't count). A safety valve
-// so a large bulk session can't spike request volume. Resets on page reload.
-const LP_PROFILE_MAX = 40;
-let lpProfileFetched = 0;
-let lpProfileCapped = false;
-// Jittered human-like spacing between network resolves (NOT a fixed cadence — fixed
-// intervals are the easiest automation signal to detect). Range ~1.5s–4s.
-function lpProfileDelay() { return 1500 + Math.floor(Math.random() * 2500); }
+// Per-session cap on NETWORK fetches (passive resolves don't count).
+const LP_PROFILE_MAX    = 40; // hard stop — no fetches beyond this
+const LP_PROFILE_WARN   = 25; // amber warning banner (62%)
+const LP_PROFILE_DANGER = 35; // red warning banner (87%)
+const lpFetchWarnShown  = new Set(); // which thresholds have already been surfaced
+
+// Persist fetch count across SPA navigations in the same browser tab.
+// sessionStorage resets on tab close (new LinkedIn session = new baseline).
+let lpProfileFetched = parseInt(sessionStorage.getItem('lp_fetch_count') || '0', 10);
+let lpProfileCapped  = lpProfileFetched >= LP_PROFILE_MAX;
+
+// Adaptive jitter — delay grows as count climbs so late-session pacing slows naturally.
+// Early (<20): 1.5–4s  |  Mid (20-29): 2–5s  |  Late (30+): 3–6.5s
+function lpProfileDelay() {
+    if (lpProfileFetched < 20) return 1500 + Math.floor(Math.random() * 2500);
+    if (lpProfileFetched < 30) return 2000 + Math.floor(Math.random() * 3000);
+    return 3000 + Math.floor(Math.random() * 3500);
+}
+
+// ---- Idle guard ----
+// If the user has been inactive for 5 min, the queue pauses — no automated fetches
+// while the browser sits idle. Resumes as soon as the user moves the mouse or types.
+let lpUserIdle = false;
+let lpIdleTimer = null;
+function lpResetIdle() {
+    const wasIdle = lpUserIdle;
+    lpUserIdle = false;
+    clearTimeout(lpIdleTimer);
+    lpIdleTimer = setTimeout(() => { lpUserIdle = true; }, 5 * 60 * 1000);
+    if (wasIdle && lpProfileQueue.length > 0) drainProfileQueue(); // resume
+}
+document.addEventListener('mousemove', lpResetIdle, { passive: true });
+document.addEventListener('keydown',   lpResetIdle, { passive: true });
+lpResetIdle(); // start timer immediately
 
 function enqueueProfileFetch(salesNavUrl) {
     if (!salesNavUrl) return;
@@ -768,22 +794,44 @@ async function drainProfileQueue() {
     lpProfileBusy = true;
     try {
         while (lpProfileQueue.length) {
+            // Safety: pause while the user is idle — no automated fetches in an inactive tab.
+            if (lpUserIdle) {
+                lpProfileBusy = false;
+                return; // lpResetIdle() will call drainProfileQueue() when activity resumes
+            }
+
             const url = lpProfileQueue.shift();
             const k = window.LeadPilot.urlKey(url);
             const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
-            if (!lead || lead.linkedinProfileUrl) continue; // deselected, or already resolved
+            if (!lead || lead.linkedinProfileUrl) continue; // deselected or already resolved
 
-            // Passive first — free, no network. If the id is already on the page, use it.
+            // Passive first — free, no network.
             const passive = resolveProfileUrlPassive(url);
             if (passive) { lead.linkedinProfileUrl = passive; continue; }
 
-            // Network fallback (Strategy 2) — gated by the per-session cap.
+            // Hard cap.
             if (lpProfileFetched >= LP_PROFILE_MAX) {
                 lpProfileCapped = true;
-                console.warn('[LeadPilot] Profile-URL fetch cap reached (' + LP_PROFILE_MAX + '/session); leaving remaining unresolved.');
-                continue;
+                console.warn('[LeadPilot] Fetch cap reached (' + LP_PROFILE_MAX + '/session).');
+                showFetchWarning('Session limit reached (' + LP_PROFILE_MAX + '/40). Reload page to reset.', 'danger');
+                break;
             }
+
             lpProfileFetched++;
+            sessionStorage.setItem('lp_fetch_count', lpProfileFetched); // persist across SPA navs
+
+            // Threshold warnings — shown once per level per session.
+            if (lpProfileFetched >= LP_PROFILE_WARN && !lpFetchWarnShown.has('warn')) {
+                lpFetchWarnShown.add('warn');
+                showFetchWarning('Profile URL lookups: ' + lpProfileFetched + '/40. ' +
+                    'Slow down if you plan to select many more leads.', 'warn');
+            }
+            if (lpProfileFetched >= LP_PROFILE_DANGER && !lpFetchWarnShown.has('danger')) {
+                lpFetchWarnShown.add('danger');
+                showFetchWarning('High lookup count: ' + lpProfileFetched + '/40. ' +
+                    'Consider saving now and reloading to reset the counter.', 'danger');
+            }
+
             try {
                 const profileUrl = await fetchProfileUrlViaPage(url);
                 if (profileUrl) {
@@ -791,6 +839,7 @@ async function drainProfileQueue() {
                     if (still) still.linkedinProfileUrl = profileUrl;
                 }
             } catch (e) {}
+
             if (lpProfileQueue.length) await new Promise(r => setTimeout(r, lpProfileDelay()));
         }
     } finally {
@@ -1834,6 +1883,21 @@ function updateStatus(msg, color = '#94a3b8') {
     bar.style.color = color;
     bar.textContent = msg;
     setTimeout(() => { bar.textContent = ''; }, 5000);
+}
+
+// Risk warnings — persistent (not auto-cleared) and styled distinctly from transient status msgs.
+// level: 'warn' (amber) | 'danger' (red)
+function showFetchWarning(msg, level = 'warn') {
+    // Also log so it shows up in DevTools even if panel is minimized.
+    const prefix = level === 'danger' ? '[LeadPilot] RISK WARNING' : '[LeadPilot] Warning';
+    console.warn(prefix + ':', msg);
+
+    const bar = document.getElementById('lp-status-bar');
+    if (!bar) return;
+    bar.style.color = level === 'danger' ? '#ef4444' : '#f59e0b';
+    bar.style.fontWeight = '600';
+    bar.textContent = (level === 'danger' ? '⛔ ' : '⚠ ') + msg;
+    // Risk warnings are NOT auto-cleared — they stay until the user saves or reloads.
 }
 
 // =============================================
