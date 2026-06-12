@@ -88,12 +88,22 @@ let undoTimeout = null;
 const linkedInProfileUrlCache = new Map(); // canonical urlKey(salesNavUrl) -> linkedinProfileUrl
 let lastObservedProfileUrl = '';
 
+// Diagnostics: how each lead's /in/ URL got resolved this session. Logged on save.
+// 'preview' = captured from the panel a preview-click opened; 'passive' = cache/SSR
+// without a preview; 'fetched' = network fallback; 'unresolved' = left empty.
+const lpStats = { passive: 0, preview: 0, fetched: 0, unresolved: 0 };
+
 // Cache helpers — keyed by canonical urlKey so observed /in/ URLs match a lead
 // regardless of query-string / www / comma-suffix variants (otherwise raw-key misses
 // caused unnecessary network fetches).
 function cacheProfileUrl(salesNavUrl, profileUrl) {
     const k = window.LeadPilot.urlKey(salesNavUrl);
-    if (k && profileUrl) linkedInProfileUrlCache.set(k, profileUrl);
+    if (k && profileUrl) {
+        linkedInProfileUrlCache.set(k, profileUrl);
+        // Wake any preview-queue waiter blocked on this lead (resolves its capture Promise).
+        const waiter = lpPreviewWaiters.get(k);
+        if (waiter) waiter();
+    }
 }
 function getCachedProfileUrl(salesNavUrl) {
     return linkedInProfileUrlCache.get(window.LeadPilot.urlKey(salesNavUrl)) || '';
@@ -319,6 +329,7 @@ function selectAllRowsForLeadPilot() {
             if (data.linkedinUrl) {
                 if (!data.linkedinProfileUrl) {
                     data.linkedinProfileUrl = resolveProfileUrlPassive(data.linkedinUrl);
+                    if (data.linkedinProfileUrl) lpStats.passive++;
                 }
                 selectionStore.add(data);
                 row.classList.add('lp-row-selected');
@@ -326,8 +337,8 @@ function selectAllRowsForLeadPilot() {
                 // Tick the native checkbox
                 const cb = row.querySelector('input[type="checkbox"]');
                 if (cb) cb.checked = true;
-                // Queue throttled background resolution for any still unresolved.
-                if (!data.linkedinProfileUrl) enqueueProfileFetch(data.linkedinUrl);
+                // Queue a preview pass for any still unresolved (fetch is fallback only).
+                if (!data.linkedinProfileUrl) enqueuePreview(row, data.linkedinUrl);
             }
         });
     });
@@ -676,16 +687,54 @@ function initProfileUrlObserver() {
                         if (lead && !lead.linkedinProfileUrl) {
                             lead.linkedinProfileUrl = profileUrl;
                         }
+                    } else if (lpPreviewWaiters.size === 1) {
+                        // No Sales Nav link nearby, but exactly ONE preview is awaited —
+                        // the panel we just opened is the only plausible source, so
+                        // attribute the URL to that lead.
+                        const awaitedKey = lpPreviewWaiters.keys().next().value;
+                        linkedInProfileUrlCache.set(awaitedKey, profileUrl);
+                        const waiter = lpPreviewWaiters.get(awaitedKey);
+                        if (waiter) waiter();
                     } else {
                         // No Sales Nav link nearby — store as most recently observed
                         lastObservedProfileUrl = profileUrl;
                     }
+                }
+
+                // While a preview is awaited, also scan inserted text/JSON for
+                // "publicIdentifier" near the awaited lead's handle — the panel may
+                // embed the id in data without rendering an /in/ anchor.
+                if (lpPreviewWaiters.size > 0 && node.textContent) {
+                    scanNodeForAwaitedHandles(node);
                 }
             }
         }
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+}
+
+// While a preview is awaited: scan a freshly inserted subtree's text for a
+// "publicIdentifier" that sits NEAR the awaited lead's Sales Nav handle (panel
+// data may embed the id without rendering an /in/ anchor). Window-bounded match
+// so an unrelated profile's id elsewhere in the blob isn't mis-attributed.
+function scanNodeForAwaitedHandles(node) {
+    try {
+        const text = node.textContent;
+        if (!text || text.length < 20) return;
+        for (const [key, waiter] of lpPreviewWaiters) {
+            const handle = key.match(/\/sales\/(?:lead|people)\/([A-Za-z0-9_-]+)/)?.[1];
+            if (!handle) continue;
+            const idx = text.indexOf(handle);
+            if (idx === -1) continue;
+            const windowText = text.slice(Math.max(0, idx - 3000), idx + 3000);
+            const m = windowText.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            if (m) {
+                linkedInProfileUrlCache.set(key, 'https://www.linkedin.com/in/' + m[1]);
+                waiter();
+            }
+        }
+    } catch (e) {}
 }
 
 // Search the current page's embedded JSON data (no network request needed)
@@ -775,11 +824,100 @@ function lpResetIdle() {
     lpUserIdle = false;
     clearTimeout(lpIdleTimer);
     lpIdleTimer = setTimeout(() => { lpUserIdle = true; }, 5 * 60 * 1000);
-    if (wasIdle && lpProfileQueue.length > 0) drainProfileQueue(); // resume
+    if (wasIdle) { // resume both queues
+        if (lpProfileQueue.length > 0) drainProfileQueue();
+        if (typeof lpPreviewQueue !== 'undefined' && lpPreviewQueue.length > 0) drainPreviewQueue();
+    }
 }
 document.addEventListener('mousemove', lpResetIdle, { passive: true });
 document.addEventListener('keydown',   lpResetIdle, { passive: true });
 lpResetIdle(); // start timer immediately
+
+// =============================================
+// SEQUENTIAL PREVIEW QUEUE — capture /in/ URLs via Sales Nav's OWN preview panel
+// =============================================
+// On select, we dispatch a click on a non-navigation cell of the lead's row.
+// Sales Navigator opens its right-side preview panel (ITS network request, not ours);
+// the MutationObserver captures the /in/ URL from the panel DOM. One preview at a
+// time, jittered gaps — looks like a person browsing through leads. Only leads the
+// preview couldn't resolve fall through to the throttled fetch queue.
+const lpPreviewQueue = [];            // { row, url } awaiting a preview pass
+let lpPreviewBusy = false;
+const lpPreviewWaiters = new Map();   // urlKey -> resolve fn for the in-flight capture wait
+const LP_PREVIEW_WAIT_MS = 2500;      // max wait for the panel to render a /in/ URL
+function lpPreviewGap() { return 800 + Math.floor(Math.random() * 700); } // 0.8–1.5s
+
+function enqueuePreview(row, salesNavUrl) {
+    if (!salesNavUrl) return;
+    const k = window.LeadPilot.urlKey(salesNavUrl);
+    if (!k) return;
+    if (lpPreviewQueue.some(item => window.LeadPilot.urlKey(item.url) === k)) return; // dedupe
+    lpPreviewQueue.push({ row, url: salesNavUrl });
+    drainPreviewQueue();
+}
+
+// Find a click target inside the row that opens the preview but never navigates:
+// semantic data-anonymize spans first (stable, never links), then any cell with
+// neither a checkbox nor a /sales/ anchor.
+function findPreviewClickTarget(row) {
+    for (const attr of ['job-title', 'company-name', 'location']) {
+        const el = row.querySelector(`[data-anonymize="${attr}"]`);
+        if (el && !el.closest('a')) return el;
+    }
+    for (const cell of row.querySelectorAll('td, li > div > div')) {
+        if (!cell.querySelector('input[type="checkbox"]') &&
+            !cell.querySelector('a[href*="/sales/"]')) return cell;
+    }
+    return null;
+}
+
+async function drainPreviewQueue() {
+    if (lpPreviewBusy) return;
+    lpPreviewBusy = true;
+    try {
+        while (lpPreviewQueue.length) {
+            if (lpUserIdle) { lpPreviewBusy = false; return; } // resumes via lpResetIdle
+
+            const { row, url } = lpPreviewQueue.shift();
+            const k = window.LeadPilot.urlKey(url);
+            const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
+            if (!lead || lead.linkedinProfileUrl) continue; // deselected or already resolved
+
+            // Cheap re-check: cache/SSR may have filled in while this item waited.
+            const passive = resolveProfileUrlPassive(url);
+            if (passive) { lead.linkedinProfileUrl = passive; lpStats.passive++; renderPanel(); continue; }
+
+            // Row virtualized away (scrolled/paginated) — can't click it; use fetch path.
+            const target = (row && row.isConnected) ? findPreviewClickTarget(row) : null;
+            if (!target) { enqueueProfileFetch(url); continue; }
+
+            // Open the preview and wait for the observer to capture this lead's URL.
+            try {
+                target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            } catch (e) {}
+
+            await new Promise(resolve => {
+                lpPreviewWaiters.set(k, resolve);
+                setTimeout(resolve, LP_PREVIEW_WAIT_MS); // timeout fallback
+            });
+            lpPreviewWaiters.delete(k);
+
+            const captured = getCachedProfileUrl(url);
+            if (captured) {
+                const still = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
+                if (still && !still.linkedinProfileUrl) still.linkedinProfileUrl = captured;
+                lpStats.preview++;
+                renderPanel();
+            } else {
+                enqueueProfileFetch(url); // preview didn't yield — capped/throttled fetch
+            }
+
+            if (lpPreviewQueue.length) await new Promise(r => setTimeout(r, lpPreviewGap()));
+        }
+    } finally {
+        lpPreviewBusy = false;
+    }
+}
 
 function enqueueProfileFetch(salesNavUrl) {
     if (!salesNavUrl) return;
@@ -807,7 +945,7 @@ async function drainProfileQueue() {
 
             // Passive first — free, no network.
             const passive = resolveProfileUrlPassive(url);
-            if (passive) { lead.linkedinProfileUrl = passive; continue; }
+            if (passive) { lead.linkedinProfileUrl = passive; lpStats.passive++; continue; }
 
             // Hard cap.
             if (lpProfileFetched >= LP_PROFILE_MAX) {
@@ -835,8 +973,11 @@ async function drainProfileQueue() {
             try {
                 const profileUrl = await fetchProfileUrlViaPage(url);
                 if (profileUrl) {
+                    cacheProfileUrl(url, profileUrl);
                     const still = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                     if (still) still.linkedinProfileUrl = profileUrl;
+                    lpStats.fetched++;
+                    renderPanel();
                 }
             } catch (e) {}
 
@@ -995,15 +1136,16 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 // Select for LeadPilot — try passive resolution first (instant, no network).
                 if (!data.linkedinProfileUrl && data.linkedinUrl) {
                     data.linkedinProfileUrl = resolveProfileUrlPassive(data.linkedinUrl);
+                    if (data.linkedinProfileUrl) lpStats.passive++;
                 }
                 selectionStore.add(data);
                 row.classList.add('lp-row-selected');
                 linkedinCheckbox.checked = true; // show the tick
                 applyCheckboxGlow(row, 'leadpilot');
-                // If still unresolved, queue a throttled background fetch (spreads
-                // requests over the time the user keeps selecting — low burst).
+                // If still unresolved: queue a preview pass — Sales Nav's own panel
+                // renders the /in/ URL (its request, not ours). Fetch is fallback only.
                 if (!data.linkedinProfileUrl && data.linkedinUrl) {
-                    enqueueProfileFetch(data.linkedinUrl);
+                    enqueuePreview(row, data.linkedinUrl);
                 }
             }
             // renderPanel / updateModeBarUI / updateSelectAllState fire via the store subscription.
@@ -1287,8 +1429,9 @@ async function saveAllLeads() {
 
     const tabs = getSelectedTabs();
 
-    // Make sure any not-yet-resolved leads get queued, then wait (capped) for the
-    // throttled background resolver to finish so the review modal shows the /in/ URLs.
+    // At save time the preview queue stops (rows may be gone; the fetch path is
+    // faster) — any still-unresolved leads go straight to the throttled fetch queue.
+    lpPreviewQueue.length = 0;
     selectionStore.values().forEach(l => {
         if (!l.linkedinProfileUrl && l.linkedinUrl) enqueueProfileFetch(l.linkedinUrl);
     });
@@ -1302,6 +1445,16 @@ async function saveAllLeads() {
         if (saveBtn) saveBtn.disabled = false;
         if (saveLabel) saveLabel.textContent = prevLabel;
     }
+
+    // Diagnostics: how this batch's URLs were resolved (preview-capture rate is the
+    // number that tells us whether the click-to-preview strategy is working live).
+    lpStats.unresolved = selectionStore.values().filter(l => !l.linkedinProfileUrl).length;
+    console.table([{ ...lpStats }]);
+    updateStatus(
+        `URLs: ${lpStats.passive} passive · ${lpStats.preview} preview · ${lpStats.fetched} fetched` +
+        (lpStats.unresolved ? ` · ${lpStats.unresolved} unresolved` : ''),
+        '#8aa1ec'
+    );
 
     showReviewModal([...selectionStore.values()], tabs, false);
 }
