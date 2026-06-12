@@ -677,6 +677,8 @@ function initProfileUrlObserver() {
                     ) || link.parentElement;
 
                     const salesLink = panel?.querySelector('a[href*="/sales/lead/"], a[href*="/sales/people/"]');
+                    lpLog('[observer] /in/ link rendered:', profileUrl,
+                          salesLink ? '→ paired with ' + salesLink.href.split('?')[0] : '→ NO sales link nearby');
                     if (salesLink) {
                         const salesUrl = salesLink.href.split('?')[0];
                         cacheProfileUrl(salesUrl, profileUrl);
@@ -712,6 +714,7 @@ function initProfileUrlObserver() {
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+    lpLog('[observer] profile-URL observer started');
 }
 
 // While a preview is awaited: scan a freshly inserted subtree's text for a
@@ -730,6 +733,7 @@ function scanNodeForAwaitedHandles(node) {
             const windowText = text.slice(Math.max(0, idx - 3000), idx + 3000);
             const m = windowText.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
             if (m) {
+                lpLog('[json-scan] publicIdentifier found near awaited handle:', m[1]);
                 linkedInProfileUrlCache.set(key, 'https://www.linkedin.com/in/' + m[1]);
                 waiter();
             }
@@ -774,6 +778,7 @@ function resolveProfileUrlPassive(salesNavUrl) {
 // highest detection-risk path. Network access is throttled + capped by the queue.
 async function fetchProfileUrlViaPage(salesNavUrl) {
     try {
+        lpLog('[fetch] GET', salesNavUrl);
         const resp = await fetch(salesNavUrl, {
             credentials: 'include',
             headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }
@@ -781,13 +786,19 @@ async function fetchProfileUrlViaPage(salesNavUrl) {
         if (resp.ok) {
             const html = await resp.text();
             const m1 = html.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            const m2 = m1 ? null : html.match(/"vanityName"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
+            const m3 = (m1 || m2) ? null : html.match(/href="(https:\/\/www\.linkedin\.com\/in\/[^"?#]+)/);
+            lpLog('[fetch] status', resp.status, '| html length', html.length,
+                  '| matched:', m1 ? 'publicIdentifier' : m2 ? 'vanityName' : m3 ? 'href' : 'NOTHING');
             if (m1) return 'https://www.linkedin.com/in/' + m1[1];
-            const m2 = html.match(/"vanityName"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
             if (m2) return 'https://www.linkedin.com/in/' + m2[1];
-            const m3 = html.match(/href="(https:\/\/www\.linkedin\.com\/in\/[^"?#]+)/);
             if (m3) return m3[1];
+        } else {
+            lpLog('[fetch] non-OK status:', resp.status, resp.statusText);
         }
-    } catch (e) {}
+    } catch (e) {
+        lpLog('[fetch] ERROR:', e.message);
+    }
     return '';
 }
 
@@ -847,12 +858,17 @@ const lpPreviewWaiters = new Map();   // urlKey -> resolve fn for the in-flight 
 const LP_PREVIEW_WAIT_MS = 2500;      // max wait for the panel to render a /in/ URL
 function lpPreviewGap() { return 800 + Math.floor(Math.random() * 700); } // 0.8–1.5s
 
+// Diagnostic logging for the resolution pipeline — flip off once verified live.
+const LP_DEBUG = true;
+function lpLog(...args) { if (LP_DEBUG) console.log('[LeadPilot]', ...args); }
+
 function enqueuePreview(row, salesNavUrl) {
     if (!salesNavUrl) return;
     const k = window.LeadPilot.urlKey(salesNavUrl);
     if (!k) return;
     if (lpPreviewQueue.some(item => window.LeadPilot.urlKey(item.url) === k)) return; // dedupe
     lpPreviewQueue.push({ row, url: salesNavUrl });
+    lpLog('[preview] queued:', salesNavUrl);
     drainPreviewQueue();
 }
 
@@ -889,12 +905,22 @@ async function drainPreviewQueue() {
 
             // Row virtualized away (scrolled/paginated) — can't click it; use fetch path.
             const target = (row && row.isConnected) ? findPreviewClickTarget(row) : null;
-            if (!target) { enqueueProfileFetch(url); continue; }
+            if (!target) {
+                lpLog('[preview] no click target (row gone?) — falling back to fetch:', url);
+                enqueueProfileFetch(url);
+                continue;
+            }
+            lpLog('[preview] click target:', target.tagName,
+                  (target.className || '').toString().slice(0, 60),
+                  '| text:', (target.textContent || '').trim().slice(0, 40));
 
             // Open the preview and wait for the observer to capture this lead's URL.
             try {
                 target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            } catch (e) {}
+                lpLog('[preview] click dispatched');
+            } catch (e) {
+                lpLog('[preview] click dispatch FAILED:', e.message);
+            }
 
             await new Promise(resolve => {
                 lpPreviewWaiters.set(k, resolve);
@@ -903,6 +929,7 @@ async function drainPreviewQueue() {
             lpPreviewWaiters.delete(k);
 
             const captured = getCachedProfileUrl(url);
+            lpLog('[preview] capture result:', captured || '(none after ' + LP_PREVIEW_WAIT_MS + 'ms — falling back to fetch)');
             if (captured) {
                 const still = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                 if (still && !still.linkedinProfileUrl) still.linkedinProfileUrl = captured;
