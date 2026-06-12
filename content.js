@@ -784,7 +784,15 @@ async function fetchProfileUrlViaPage(salesNavUrl) {
             headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }
         });
         if (resp.ok) {
-            const html = await resp.text();
+            let html = await resp.text();
+            // Probes: is the data present at all, and in what encoding?
+            lpLog('[fetch] probes:',
+                  'publicIdentifier present:', html.includes('publicIdentifier'),
+                  '| &quot;-escaped:', html.includes('&quot;publicIdentifier'),
+                  '| /in/ occurrences:', (html.match(/\/in\//g) || []).length);
+            // Sales Nav embeds its JSON in <code> blocks with HTML-escaped quotes —
+            // normalize so the literal-quote regexes below can match.
+            if (html.includes('&quot;')) html = html.replace(/&quot;/g, '"');
             const m1 = html.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
             const m2 = m1 ? null : html.match(/"vanityName"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
             const m3 = (m1 || m2) ? null : html.match(/href="(https:\/\/www\.linkedin\.com\/in\/[^"?#]+)/);
@@ -872,19 +880,44 @@ function enqueuePreview(row, salesNavUrl) {
     drainPreviewQueue();
 }
 
-// Find a click target inside the row that opens the preview but never navigates:
-// semantic data-anonymize spans first (stable, never links), then any cell with
-// neither a checkbox nor a /sales/ anchor.
+// The element a human actually clicks to open the inline preview is the lead's
+// NAME LINK — Sales Nav intercepts it SPA-style (no page navigation; the user's
+// screenshots show the URL staying on /sales/search/people while the panel opens).
+// Evidence from live run: clicking the metadata div does nothing.
 function findPreviewClickTarget(row) {
+    const nameLink = row.querySelector('a[href*="/sales/lead/"], a[href*="/sales/people/"]');
+    if (nameLink) return nameLink;
+    // Fallback if the row has no anchor (unlikely): semantic non-link spans.
     for (const attr of ['job-title', 'company-name', 'location']) {
         const el = row.querySelector(`[data-anonymize="${attr}"]`);
         if (el && !el.closest('a')) return el;
     }
-    for (const cell of row.querySelectorAll('td, li > div > div')) {
-        if (!cell.querySelector('input[type="checkbox"]') &&
-            !cell.querySelector('a[href*="/sales/"]')) return cell;
-    }
     return null;
+}
+
+// Dispatch a human-like click: full pointer+mouse sequence (modern UIs often listen
+// on pointerdown/mousedown, not just click). A one-shot document-level guard calls
+// preventDefault() on our synthetic click so the BROWSER's default link navigation
+// is suppressed — LinkedIn's own SPA handler (registered earlier, runs first) still
+// receives the event and opens the inline preview panel.
+function lpDispatchHumanClick(el) {
+    const r = el.getBoundingClientRect();
+    const opts = {
+        bubbles: true, cancelable: true, view: window, button: 0,
+        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+    };
+    const pOpts = { ...opts, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    const guard = (ev) => ev.preventDefault();
+    document.addEventListener('click', guard);
+    try {
+        el.dispatchEvent(new PointerEvent('pointerdown', pOpts));
+        el.dispatchEvent(new MouseEvent('mousedown', opts));
+        el.dispatchEvent(new PointerEvent('pointerup', pOpts));
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+        el.dispatchEvent(new MouseEvent('click', opts));
+    } finally {
+        document.removeEventListener('click', guard);
+    }
 }
 
 async function drainPreviewQueue() {
@@ -916,7 +949,7 @@ async function drainPreviewQueue() {
 
             // Open the preview and wait for the observer to capture this lead's URL.
             try {
-                target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                lpDispatchHumanClick(target);
                 lpLog('[preview] click dispatched');
             } catch (e) {
                 lpLog('[preview] click dispatch FAILED:', e.message);
