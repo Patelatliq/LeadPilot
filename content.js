@@ -675,7 +675,6 @@ function initProfileUrlObserver() {
                         const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                         if (lead && !lead.linkedinProfileUrl) {
                             lead.linkedinProfileUrl = profileUrl;
-                            renderPanel(); // panel shows the newly captured URL immediately
                         }
                     } else {
                         // No Sales Nav link nearby — store as most recently observed
@@ -755,52 +754,6 @@ let lpProfileCapped = false;
 // Jittered human-like spacing between network resolves (NOT a fixed cadence — fixed
 // intervals are the easiest automation signal to detect). Range ~1.5s–4s.
 function lpProfileDelay() { return 1500 + Math.floor(Math.random() * 2500); }
-
-// Click a non-navigation element in the row to open Sales Navigator's right-side preview panel.
-// This triggers LinkedIn's own UI to render the profile — our MutationObserver then captures
-// the /in/ URL from the panel DOM. No background network request from LeadPilot.
-// Falls back to throttled page-fetch after 3s only if the preview didn't yield a URL.
-function triggerLeadPreview(row, salesNavUrl) {
-    // Find a clickable element that opens the preview panel but does NOT navigate away.
-    // We skip anchors (they'd navigate to the full profile page) and the checkbox cell.
-    let clickTarget = null;
-
-    // Prefer non-anchor data-anonymize spans (semantic, stable, never navigation links)
-    for (const attr of ['job-title', 'company-name', 'location']) {
-        const el = row.querySelector(`[data-anonymize="${attr}"]`);
-        if (el && !el.closest('a')) { clickTarget = el; break; }
-    }
-
-    // Fallback: any table cell that contains neither a checkbox nor a Sales Nav link
-    if (!clickTarget) {
-        for (const cell of row.querySelectorAll('td, li > div > div')) {
-            if (!cell.querySelector('input[type="checkbox"]') &&
-                !cell.querySelector('a[href*="/sales/"]')) {
-                clickTarget = cell;
-                break;
-            }
-        }
-    }
-
-    if (clickTarget) {
-        // Small delay so LeadPilot's own UI update renders before the preview shifts focus
-        setTimeout(() => {
-            try {
-                clickTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            } catch(e) {}
-        }, 150);
-    }
-
-    // Safety net: if the preview didn't cause the observer to capture a URL within 3s,
-    // fall back to the throttled page-fetch queue (capped, jittered — Option B).
-    setTimeout(() => {
-        const k = window.LeadPilot.urlKey(salesNavUrl);
-        const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
-        if (lead && !lead.linkedinProfileUrl) {
-            enqueueProfileFetch(salesNavUrl);
-        }
-    }, 3000);
-}
 
 function enqueueProfileFetch(salesNavUrl) {
     if (!salesNavUrl) return;
@@ -998,11 +951,10 @@ function hookLinkedInCheckboxes(skipSelectAll = false) {
                 row.classList.add('lp-row-selected');
                 linkedinCheckbox.checked = true; // show the tick
                 applyCheckboxGlow(row, 'leadpilot');
-                // If still unresolved: click a non-navigation element to open Sales Nav's
-                // right-side preview panel. The observer captures the /in/ URL from the panel.
-                // Falls back to throttled page-fetch after 3s only if the preview didn't help.
+                // If still unresolved, queue a throttled background fetch (spreads
+                // requests over the time the user keeps selecting — low burst).
                 if (!data.linkedinProfileUrl && data.linkedinUrl) {
-                    triggerLeadPreview(row, data.linkedinUrl);
+                    enqueueProfileFetch(data.linkedinUrl);
                 }
             }
             // renderPanel / updateModeBarUI / updateSelectAllState fire via the store subscription.
