@@ -674,15 +674,11 @@ function resolveProfileUrlPassive(salesNavUrl) {
   return findPublicIdOnCurrentPage(salesNavUrl) || '';
 }
 
-// Full resolver (user opted back in to auto-fetch — see spec §9 reversal):
-//  1) passive page read  2) fetch the Sales Nav profile page  3) internal sales-api.
-// Strategies 2 & 3 make network calls and carry account-restriction risk; access is
-// throttled (one at a time, with a delay) via the queue below to avoid bot-like bursts.
-async function fetchLinkedInProfileUrl(salesNavUrl) {
-    const pageResult = findPublicIdOnCurrentPage(salesNavUrl);
-    if (pageResult) return pageResult;
-
-    // Strategy 2: fetch the Sales Navigator profile page HTML
+// Option B resolver: passive page read is done by the caller; this performs ONLY
+// Strategy 2 — fetching the Sales Navigator profile page HTML (mimics a real
+// navigation). The internal sales-api call (old Strategy 3) was REMOVED as the
+// highest detection-risk path. Network access is throttled + capped by the queue.
+async function fetchProfileUrlViaPage(salesNavUrl) {
     try {
         const resp = await fetch(salesNavUrl, {
             credentials: 'include',
@@ -698,29 +694,6 @@ async function fetchLinkedInProfileUrl(salesNavUrl) {
             if (m3) return m3[1];
         }
     } catch (e) {}
-
-    // Strategy 3: Sales Navigator internal API
-    try {
-        const handle = salesNavUrl.match(/\/sales\/(?:lead|people)\/([^,?#]+)/)?.[1];
-        const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1] || 'ajax:0';
-        if (handle) {
-            const apiUrl = `https://www.linkedin.com/sales-api/salesApiProfiles?handles=${encodeURIComponent(handle)}&decorationId=com.linkedin.sales.deco.desktop.openlink.SalesProfile-7`;
-            const apiResp = await fetch(apiUrl, {
-                credentials: 'include',
-                headers: {
-                    'Accept': 'application/json',
-                    'X-RestLi-Protocol-Version': '2.0.0',
-                    'Csrf-Token': csrf,
-                }
-            });
-            if (apiResp.ok) {
-                const text = await apiResp.text();
-                const m = text.match(/"publicIdentifier"\s*:\s*"([a-zA-Z0-9_%-]+)"/);
-                if (m) return 'https://www.linkedin.com/in/' + m[1];
-            }
-        }
-    } catch (e) {}
-
     return '';
 }
 
@@ -728,6 +701,11 @@ async function fetchLinkedInProfileUrl(salesNavUrl) {
 // then writes the result back into the matching queued lead (by canonical key).
 const lpProfileQueue = [];
 let lpProfileBusy = false;
+// Per-session cap on NETWORK fetches (passive resolves don't count). A safety valve
+// so a large bulk session can't spike request volume. Resets on page reload.
+const LP_PROFILE_MAX = 40;
+let lpProfileFetched = 0;
+let lpProfileCapped = false;
 // Jittered human-like spacing between network resolves (NOT a fixed cadence — fixed
 // intervals are the easiest automation signal to detect). Range ~1.5s–4s.
 function lpProfileDelay() { return 1500 + Math.floor(Math.random() * 2500); }
@@ -749,8 +727,20 @@ async function drainProfileQueue() {
             const k = window.LeadPilot.urlKey(url);
             const lead = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
             if (!lead || lead.linkedinProfileUrl) continue; // deselected, or already resolved
+
+            // Passive first — free, no network. If the id is already on the page, use it.
+            const passive = resolveProfileUrlPassive(url);
+            if (passive) { lead.linkedinProfileUrl = passive; continue; }
+
+            // Network fallback (Strategy 2) — gated by the per-session cap.
+            if (lpProfileFetched >= LP_PROFILE_MAX) {
+                lpProfileCapped = true;
+                console.warn('[LeadPilot] Profile-URL fetch cap reached (' + LP_PROFILE_MAX + '/session); leaving remaining unresolved.');
+                continue;
+            }
+            lpProfileFetched++;
             try {
-                const profileUrl = await fetchLinkedInProfileUrl(url);
+                const profileUrl = await fetchProfileUrlViaPage(url);
                 if (profileUrl) {
                     const still = selectionStore.values().find(l => window.LeadPilot.urlKey(l.linkedinUrl) === k);
                     if (still) still.linkedinProfileUrl = profileUrl;
